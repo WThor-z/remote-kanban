@@ -47,5 +47,14 @@ class PtyManager {
         const finalOptions = { ...defaultOptions, ...options };
         return pty.spawn(file, args, finalOptions);
     }
+    write(terminal, data) {
+        terminal.write(data);
+    }
+    onData(terminal, handler) {
+        return terminal.onData(handler);
+    }
+    resize(terminal, cols, rows) {
+        terminal.resize(cols, rows);
+    }
 }
 exports.PtyManager = PtyManager;

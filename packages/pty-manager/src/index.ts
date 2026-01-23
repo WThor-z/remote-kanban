@@ -14,4 +14,16 @@ export class PtyManager {
 
     return pty.spawn(file, args, finalOptions);
   }
+
+  write(terminal: pty.IPty, data: string): void {
+    terminal.write(data);
+  }
+
+  onData(terminal: pty.IPty, handler: (data: string) => void) {
+    return terminal.onData(handler);
+  }
+
+  resize(terminal: pty.IPty, cols: number, rows: number): void {
+    terminal.resize(cols, rows);
+  }
 }

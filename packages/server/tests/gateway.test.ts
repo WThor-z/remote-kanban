@@ -1,17 +1,43 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { io as ioc, Socket as ClientSocket } from 'socket.io-client';
 import { startServer } from '../src/server';
 import { AddressInfo } from 'net';
 
-// Mock PtyManager
+type OnDataHandler = (data: string) => void;
+
+let onDataHandler: OnDataHandler | null = null;
+const writeMock = vi.fn();
+const killMock = vi.fn();
+const disposeMock = vi.fn();
+const spawnMock = vi.fn();
+
+const waitForCondition = (condition: () => boolean, timeoutMs: number = 1000) => {
+  return new Promise<void>((resolve, reject) => {
+    const interval = setInterval(() => {
+      if (condition()) {
+        clearInterval(interval);
+        resolve();
+      }
+    }, 10);
+
+    setTimeout(() => {
+      clearInterval(interval);
+      reject(new Error('Timed out waiting for condition'));
+    }, timeoutMs);
+  });
+};
+
 vi.mock('@opencode-vibe/pty-manager', () => {
   return {
     PtyManager: vi.fn().mockImplementation(() => ({
-      spawn: vi.fn().mockReturnValue({
-        on: vi.fn(),
-        write: vi.fn(),
-        kill: vi.fn(),
-      }),
+      spawn: spawnMock.mockImplementation(() => ({
+        onData: vi.fn((handler: OnDataHandler) => {
+          onDataHandler = handler;
+          return { dispose: disposeMock };
+        }),
+        write: writeMock,
+        kill: killMock,
+      })),
     })),
   };
 });
@@ -41,6 +67,17 @@ describe('Gateway Server', () => {
     if (clientSocket) clientSocket.disconnect();
   });
 
+  afterEach(() => {
+    if (clientSocket && clientSocket.connected) {
+      clientSocket.disconnect();
+    }
+  });
+
+  beforeEach(() => {
+    onDataHandler = null;
+    vi.clearAllMocks();
+  });
+
   it('should allow a client to connect', () => new Promise<void>((done) => {
     clientSocket = ioc(`http://localhost:${port}`);
     
@@ -49,4 +86,38 @@ describe('Gateway Server', () => {
       done();
     });
   }));
+
+  it('should spawn a shell and forward input to PTY', async () => {
+    clientSocket = ioc(`http://localhost:${port}`);
+
+    await new Promise<void>((resolve) => {
+      clientSocket.on('connect', () => resolve());
+    });
+
+    await waitForCondition(() => spawnMock.mock.calls.length > 0);
+
+    clientSocket.emit('input', 'echo test');
+
+    await waitForCondition(() => writeMock.mock.calls.length > 0);
+    expect(writeMock).toHaveBeenCalledWith('echo test');
+  });
+
+  it('should forward PTY output to client', async () => {
+    clientSocket = ioc(`http://localhost:${port}`);
+
+    await new Promise<void>((resolve) => {
+      clientSocket.on('connect', () => resolve());
+    });
+
+    await waitForCondition(() => onDataHandler !== null);
+
+    await new Promise<void>((resolve) => {
+      clientSocket.on('output', (data: string) => {
+        expect(data).toBe('hello');
+        resolve();
+      });
+
+      onDataHandler?.('hello');
+    });
+  });
 });

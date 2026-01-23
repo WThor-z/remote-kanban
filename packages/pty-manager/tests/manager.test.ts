@@ -39,4 +39,40 @@ describe('PtyManager', () => {
     expect(pty.spawn).toHaveBeenCalledWith(shell, args, expect.any(Object));
     expect(term).toBe(mockTerminal);
   });
+
+  it('should write data to the terminal', () => {
+    const manager = new PtyManager();
+    const mockTerminal = {
+      write: vi.fn(),
+    } as unknown as pty.IPty;
+
+    manager.write(mockTerminal, 'ls');
+
+    expect(mockTerminal.write).toHaveBeenCalledWith('ls');
+  });
+
+  it('should subscribe to terminal output', () => {
+    const manager = new PtyManager();
+    const subscription = { dispose: vi.fn() };
+    const mockTerminal = {
+      onData: vi.fn().mockReturnValue(subscription),
+    } as unknown as pty.IPty;
+
+    const handler = vi.fn();
+    const result = manager.onData(mockTerminal, handler);
+
+    expect(mockTerminal.onData).toHaveBeenCalledWith(handler);
+    expect(result).toBe(subscription);
+  });
+
+  it('should resize the terminal', () => {
+    const manager = new PtyManager();
+    const mockTerminal = {
+      resize: vi.fn(),
+    } as unknown as pty.IPty;
+
+    manager.resize(mockTerminal, 120, 40);
+
+    expect(mockTerminal.resize).toHaveBeenCalledWith(120, 40);
+  });
 });

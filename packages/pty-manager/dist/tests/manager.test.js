@@ -67,4 +67,31 @@ vitest_1.vi.mock('node-pty', () => {
         (0, vitest_1.expect)(pty.spawn).toHaveBeenCalledWith(shell, args, vitest_1.expect.any(Object));
         (0, vitest_1.expect)(term).toBe(mockTerminal);
     });
+    (0, vitest_1.it)('should write data to the terminal', () => {
+        const manager = new index_1.PtyManager();
+        const mockTerminal = {
+            write: vitest_1.vi.fn(),
+        };
+        manager.write(mockTerminal, 'ls');
+        (0, vitest_1.expect)(mockTerminal.write).toHaveBeenCalledWith('ls');
+    });
+    (0, vitest_1.it)('should subscribe to terminal output', () => {
+        const manager = new index_1.PtyManager();
+        const subscription = { dispose: vitest_1.vi.fn() };
+        const mockTerminal = {
+            onData: vitest_1.vi.fn().mockReturnValue(subscription),
+        };
+        const handler = vitest_1.vi.fn();
+        const result = manager.onData(mockTerminal, handler);
+        (0, vitest_1.expect)(mockTerminal.onData).toHaveBeenCalledWith(handler);
+        (0, vitest_1.expect)(result).toBe(subscription);
+    });
+    (0, vitest_1.it)('should resize the terminal', () => {
+        const manager = new index_1.PtyManager();
+        const mockTerminal = {
+            resize: vitest_1.vi.fn(),
+        };
+        manager.resize(mockTerminal, 120, 40);
+        (0, vitest_1.expect)(mockTerminal.resize).toHaveBeenCalledWith(120, 40);
+    });
 });
