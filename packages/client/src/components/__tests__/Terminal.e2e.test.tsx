@@ -1,15 +1,41 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { renderHook, act } from '@testing-library/react';
+import { render, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import type { AddressInfo } from 'net';
 import { startServer } from '../../../../server/src/server';
-import { ChatView } from '../ChatView';
-import { useOpencode } from '../../hooks/useOpencode';
+import { InputBar } from '../InputBar';
+import { Terminal } from '../Terminal';
 
 type OnDataHandler = (data: string) => void;
 
+const mockTermWrite = vi.fn();
+const mockTermOnData = vi.fn();
+const mockTermOpen = vi.fn();
+const mockTermLoadAddon = vi.fn();
+
 let serverSocket: { emit: (event: string, data: string) => void } | null = null;
 let lastInput: string | null = null;
+
+vi.mock('xterm', () => {
+  return {
+    Terminal: class {
+      open = mockTermOpen;
+      loadAddon = mockTermLoadAddon;
+      write = mockTermWrite;
+      onData = mockTermOnData;
+      dispose = vi.fn();
+      options = {};
+    },
+  };
+});
+
+vi.mock('xterm-addon-fit', () => {
+  return {
+    FitAddon: class {
+      fit = vi.fn();
+      dispose = vi.fn();
+    },
+  };
+});
 
 vi.mock('@opencode-vibe/pty-manager', () => {
   const shell = {
@@ -25,7 +51,7 @@ vi.mock('@opencode-vibe/pty-manager', () => {
   };
 });
 
-describe('ChatView E2E', () => {
+describe('Terminal E2E', () => {
   let stopServer: () => void;
   let serverPort: number;
 
@@ -63,36 +89,27 @@ describe('ChatView E2E', () => {
     vi.clearAllMocks();
   });
 
-  it('routes server output into filtered chat view', async () => {
-    const { result, unmount } = renderHook(() => useOpencode());
-    render(<ChatView />);
+  it('propagates input to server output and terminal rendering', async () => {
+    render(
+      <div>
+        <InputBar />
+        <Terminal />
+      </div>
+    );
 
-    await waitFor(() => expect(result.current.isConnected).toBe(true));
+    await waitFor(() => expect(mockTermOpen).toHaveBeenCalled());
     await waitFor(() => expect(serverSocket).not.toBeNull());
 
-    act(() => {
-      result.current.write('STATUS: Ready');
-      result.current.write('[ERROR] Boom');
-    });
+    const input = document.querySelector('[data-testid="input-bar-input"]') as HTMLInputElement;
+    const form = document.querySelector('[data-testid="input-bar-form"]') as HTMLFormElement;
 
-    await waitFor(() => expect(lastInput).toBe('[ERROR] Boom'));
+    fireEvent.change(input, { target: { value: 'echo hello' } });
+    fireEvent.submit(form);
 
-    serverSocket?.emit('output', 'STATUS: Ready');
-    serverSocket?.emit('output', '[ERROR] Boom');
+    await waitFor(() => expect(lastInput).toBe('echo hello\r'));
 
-    await waitFor(() => expect(screen.getByText('Ready')).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByText('Boom')).toBeInTheDocument());
+    serverSocket?.emit('output', 'echo hello\r');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Log' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Error' }));
-
-    expect(screen.getByText('Boom')).toBeInTheDocument();
-    expect(screen.queryByText('Ready')).not.toBeInTheDocument();
-
-    act(() => {
-      result.current.socket?.disconnect();
-    });
-
-    unmount();
+    await waitFor(() => expect(mockTermWrite).toHaveBeenCalledWith('echo hello\r'));
   });
 });
