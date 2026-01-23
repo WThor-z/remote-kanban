@@ -1,48 +1,45 @@
 # @opencode-vibe/server
 
-The WebSocket Gateway module for Opencode Vibe. It acts as the bridge between the Frontend and the PTY Manager.
+该包提供 Opencode Vibe Kanban 的后端服务，负责 WebSocket 连接管理与 PTY 会话编排。
 
-## Features
+## 输入参数 (Inputs)
 
-- **WebSocket Server**: Manages real-time communication.
-- **PTY Integration**: Spawns and controls pseudo-terminals via `@opencode-vibe/pty-manager`.
-- **Protocol Enforced**: Uses `@opencode-vibe/protocol` for message definitions.
+### WebSocket 事件
 
-## Installation
+- `input` (Client -> Server)
+  - 类型: `string`
+  - 说明: 客户端终端输入的原始字符流，例如键盘输入、命令文本、控制字符等。
 
-This package is part of the workspace.
+## 输出参数 (Outputs)
+
+### WebSocket 事件
+
+- `output` (Server -> Client)
+  - 类型: `string`
+  - 说明: PTY 进程输出的原始字符流，包含命令输出、提示符、错误信息等。
+
+## 使用示例 (Usage Examples)
+
+### 启动服务
 
 ```bash
-npm install
-```
-
-## Usage
-
-### Development
-
-```bash
+npm run build --workspaces
 npm start
-# or
-npm run dev
 ```
 
-### Testing
+### 客户端交互示例
 
-```bash
-npm test
+```text
+Client -> Server: "dir\r"
+Server -> Client: "<directory listing>"
 ```
 
-## API
+## 内部逻辑 (Internal Logic)
 
-### WebSocket Events
-
-- `connect`: Client connected.
-- `disconnect`: Client disconnected.
-- (More to be added as features are implemented)
-
-## Architecture
-
-1. **Frontend** connects to **Server** via WebSocket.
-2. **Server** spawns a shell using **PtyManager**.
-3. **Server** forwards shell output to Frontend.
-4. **Server** forwards Frontend input to shell.
+1. 客户端通过 `socket.io` 建立连接后，服务端创建一个新的 PTY 会话。
+2. 根据操作系统选择 Shell:
+   - Windows: `powershell.exe`
+   - macOS/Linux: `bash`
+3. 服务端监听 `input` 事件，将数据写入 PTY 的 stdin。
+4. 服务端订阅 PTY 的 `onData` 输出流，并通过 `output` 事件推送给客户端。
+5. 客户端断开连接时，销毁 PTY 进程并释放资源。
