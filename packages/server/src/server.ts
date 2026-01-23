@@ -18,9 +18,35 @@ export function startServer(port: number = 3000) {
 
   // Initialize PtyManager - intended for use in future socket events
   const ptyManager = new PtyManager();
+  let activeSession: {
+    socket: Parameters<Parameters<typeof io.on>[1]>[0];
+    shell: ReturnType<PtyManager['spawn']>;
+    subscription: { dispose: () => void };
+  } | null = null;
+
+  const cleanupSession = () => {
+    if (!activeSession) {
+      return;
+    }
+
+    try {
+      activeSession.shell.kill();
+      activeSession.subscription.dispose();
+      activeSession.socket.disconnect(true);
+    } catch (err) {
+      console.error('Error cleanup shell:', err);
+    } finally {
+      activeSession = null;
+    }
+  };
 
   io.on('connection', (socket) => {
     console.log('Client connected:', socket.id);
+
+    if (activeSession) {
+      socket.emit('output', '\r\n\x1b[33mNotice: Previous session closed.\x1b[0m\r\n');
+      cleanupSession();
+    }
     
     // Spawn a shell for this client
     // For MVP, we spawn a new shell for each connection, 
@@ -49,6 +75,8 @@ export function startServer(port: number = 3000) {
         socket.emit('output', data);
       });
 
+      activeSession = { socket, shell, subscription };
+
       socket.on('disconnect', () => {
         console.log('Client disconnected:', socket.id);
         try {
@@ -56,6 +84,10 @@ export function startServer(port: number = 3000) {
           subscription.dispose();
         } catch (err) {
           console.error('Error cleanup shell:', err);
+        }
+
+        if (activeSession?.socket.id === socket.id) {
+          activeSession = null;
         }
       });
     } catch (err) {

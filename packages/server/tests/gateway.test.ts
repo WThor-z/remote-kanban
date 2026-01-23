@@ -44,6 +44,7 @@ vi.mock('@opencode-vibe/pty-manager', () => {
 
 describe('Gateway Server', () => {
   let clientSocket: ClientSocket;
+  let secondarySocket: ClientSocket | null = null;
   let httpServer: any;
   let port: number;
   let stopServer: () => void;
@@ -65,12 +66,17 @@ describe('Gateway Server', () => {
   afterAll(() => {
     if (stopServer) stopServer();
     if (clientSocket) clientSocket.disconnect();
+    if (secondarySocket) secondarySocket.disconnect();
   });
 
   afterEach(() => {
     if (clientSocket && clientSocket.connected) {
       clientSocket.disconnect();
     }
+    if (secondarySocket && secondarySocket.connected) {
+      secondarySocket.disconnect();
+    }
+    secondarySocket = null;
   });
 
   beforeEach(() => {
@@ -119,5 +125,29 @@ describe('Gateway Server', () => {
 
       onDataHandler?.('hello');
     });
+  });
+
+  it('should disconnect prior client when a new one connects', async () => {
+    clientSocket = ioc(`http://localhost:${port}`);
+
+    await new Promise<void>((resolve) => {
+      clientSocket.on('connect', () => resolve());
+    });
+
+    const disconnected = new Promise<void>((resolve) => {
+      clientSocket.on('disconnect', () => resolve());
+    });
+
+    secondarySocket = ioc(`http://localhost:${port}`);
+
+    await new Promise<void>((resolve) => {
+      secondarySocket?.on('connect', () => resolve());
+    });
+
+    await disconnected;
+
+    await waitForCondition(() => killMock.mock.calls.length > 0);
+    expect(killMock).toHaveBeenCalled();
+    expect(spawnMock.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 });
