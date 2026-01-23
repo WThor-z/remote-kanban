@@ -56,12 +56,13 @@ Server emits: output -> "<directory listing>"
 ## 内部逻辑 (Internal Logic)
 
 1. `useOpencode` 在首次调用时创建 `socket.io-client` 单例连接，默认连接 `http://localhost:3000`，可通过环境变量覆盖。
-2. `Terminal` 组件挂载时初始化 `xterm` 与 `FitAddon`，并监听容器尺寸变化。
-3. 用户在终端内输入时，`xterm.onData` 触发并调用 `write`，将字符流发送至服务器。
-4. 服务端通过 `output` 事件推送数据后，`Terminal` 会将内容写入 `xterm` 渲染区。
-5. `ChatView` 订阅相同的输出事件，使用协议 `Parser` 转为带类型的消息对象并追加到消息列表。
-6. 消息列表支持按类型筛选，在全量视图下按类型分组；日志视图支持按 level 过滤。
-7. `InputBar` 提交时会对输入进行 trim，发送 `\r` 结尾的命令并清空输入框。
+2. 断开连接后会触发 500ms 的自动重连，防止瞬时断线。
+3. `Terminal` 组件挂载时初始化 `xterm` 与 `FitAddon`，并监听容器尺寸变化。
+4. 用户在终端内输入时，`xterm.onData` 触发并调用 `write`，将字符流发送至服务器。
+5. 服务端通过 `output` 事件推送数据后，`Terminal` 会将内容写入 `xterm` 渲染区。
+6. `ChatView` 订阅相同的输出事件，使用协议 `Parser` 转为带类型的消息对象并追加到消息列表。
+7. 消息列表支持按类型筛选，在全量视图下按类型分组；日志视图支持按 level 过滤。
+8. `InputBar` 提交时会对输入进行 trim，发送 `\r` 结尾的命令并清空输入框。
 
 ## 其他脚本
 

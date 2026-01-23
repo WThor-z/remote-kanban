@@ -42,4 +42,5 @@ Server -> Client: "<directory listing>"
    - macOS/Linux: `bash`
 3. 服务端监听 `input` 事件，将数据写入 PTY 的 stdin。
 4. 服务端订阅 PTY 的 `onData` 输出流，并通过 `output` 事件推送给客户端。
-5. 客户端断开连接时，销毁 PTY 进程并释放资源。
+5. 单例互斥策略: 新客户端连接时会关闭旧会话，确保仅保留一个活动 PTY。
+6. 客户端断开连接时，销毁 PTY 进程并释放资源。
