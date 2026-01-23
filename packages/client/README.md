@@ -10,6 +10,10 @@
   - 类型: `string`
   - 说明: 将用户输入写入 WebSocket，转发到服务器的 PTY。
 
+- `OPENCODE_SOCKET_URL` / `VITE_OPENCODE_SOCKET_URL`
+  - 类型: `string`
+  - 说明: 可选配置项，用于覆盖默认的 Socket 地址（默认 `http://localhost:3000`）。
+
 - `onData(callback: (data: string) => void)`
   - 类型: `function`
   - 说明: 订阅服务端 `output` 事件，回调函数接收终端输出字符串。
@@ -51,7 +55,7 @@ Server emits: output -> "<directory listing>"
 
 ## 内部逻辑 (Internal Logic)
 
-1. `useOpencode` 在首次调用时创建 `socket.io-client` 单例连接，默认连接 `http://localhost:3000`。
+1. `useOpencode` 在首次调用时创建 `socket.io-client` 单例连接，默认连接 `http://localhost:3000`，可通过环境变量覆盖。
 2. `Terminal` 组件挂载时初始化 `xterm` 与 `FitAddon`，并监听容器尺寸变化。
 3. 用户在终端内输入时，`xterm.onData` 触发并调用 `write`，将字符流发送至服务器。
 4. 服务端通过 `output` 事件推送数据后，`Terminal` 会将内容写入 `xterm` 渲染区。

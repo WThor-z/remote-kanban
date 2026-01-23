@@ -2,13 +2,33 @@ import { useEffect, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 
 let socket: Socket | undefined;
+let socketUrl: string | undefined;
+
+const resolveSocketUrl = () => {
+  const envUrl = typeof import.meta !== 'undefined'
+    ? import.meta.env?.VITE_OPENCODE_SOCKET_URL
+    : undefined;
+
+  if (envUrl) {
+    return envUrl;
+  }
+
+  if (typeof process !== 'undefined' && process.env?.OPENCODE_SOCKET_URL) {
+    return process.env.OPENCODE_SOCKET_URL;
+  }
+
+  return 'http://localhost:3000';
+};
 
 export const useOpencode = () => {
+  const url = resolveSocketUrl();
   const [isConnected, setIsConnected] = useState(socket?.connected || false);
 
   useEffect(() => {
-    if (!socket) {
-      socket = io('http://localhost:3000');
+    if (!socket || socketUrl !== url) {
+      socket?.disconnect();
+      socket = io(url);
+      socketUrl = url;
     }
 
     function onConnect() {
@@ -33,7 +53,7 @@ export const useOpencode = () => {
       socket?.off('connect', onConnect);
       socket?.off('disconnect', onDisconnect);
     };
-  }, []);
+  }, [url]);
 
   const write = useCallback((data: string) => {
     socket?.emit('input', data);

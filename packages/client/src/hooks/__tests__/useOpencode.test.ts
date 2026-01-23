@@ -43,4 +43,14 @@ describe('useOpencode', () => {
 
     expect(result.current.isConnected).toBe(true);
   });
+
+  it('uses environment URL when provided', () => {
+    process.env.OPENCODE_SOCKET_URL = 'http://localhost:4321';
+
+    renderHook(() => useOpencode());
+
+    expect(io).toHaveBeenCalledWith('http://localhost:4321');
+
+    delete process.env.OPENCODE_SOCKET_URL;
+  });
 });
