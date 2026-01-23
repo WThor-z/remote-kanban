@@ -1,0 +1,26 @@
+{
+  "name": "@opencode-vibe/server",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc -w & nodemon dist/index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.7.4",
+    "cors": "^2.8.5",
+    "@opencode-vibe/protocol": "^1.0.0",
+    "@opencode-vibe/pty-manager": "^0.0.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.1",
+    "socket.io-client": "^4.7.4",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.11.16",
+    "@types/cors": "^2.8.17"
+  }
+}
