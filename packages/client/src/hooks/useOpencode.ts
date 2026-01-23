@@ -1,14 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 
+let socket: Socket | undefined;
+
 export const useOpencode = () => {
-  const [isConnected, setIsConnected] = useState(false);
-  const [socket, setSocket] = useState<Socket | null>(null);
+  const [isConnected, setIsConnected] = useState(socket?.connected || false);
 
   useEffect(() => {
-    const socketInstance = io();
-
-    setSocket(socketInstance);
+    if (!socket) {
+      socket = io('http://localhost:3000');
+    }
 
     function onConnect() {
       setIsConnected(true);
@@ -18,15 +19,36 @@ export const useOpencode = () => {
       setIsConnected(false);
     }
 
-    socketInstance.on('connect', onConnect);
-    socketInstance.on('disconnect', onDisconnect);
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
+    
+    // Check initial connection status
+    setTimeout(() => {
+      if (socket?.connected) {
+        setIsConnected(true);
+      }
+    }, 0);
 
     return () => {
-      socketInstance.off('connect', onConnect);
-      socketInstance.off('disconnect', onDisconnect);
-      socketInstance.disconnect();
+      socket?.off('connect', onConnect);
+      socket?.off('disconnect', onDisconnect);
     };
   }, []);
 
-  return { isConnected, socket };
+  const write = useCallback((data: string) => {
+    socket?.emit('input', data);
+  }, []);
+
+  const onData = useCallback((callback: (data: string) => void) => {
+    if (!socket) return () => {};
+
+    const handler = (data: string) => callback(data);
+    socket.on('output', handler);
+
+    return () => {
+      socket?.off('output', handler);
+    };
+  }, []);
+
+  return { isConnected, socket, write, onData };
 };

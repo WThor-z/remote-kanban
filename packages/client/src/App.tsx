@@ -1,15 +1,16 @@
 import { useOpencode } from './hooks/useOpencode';
-import { Terminal } from 'lucide-react';
+import { Terminal as TerminalIcon } from 'lucide-react';
+import { Terminal } from './components/Terminal';
 
 function App() {
   const { isConnected } = useOpencode();
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-4">
+    <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-4 gap-8">
       <div className="bg-slate-800 p-8 rounded-xl shadow-2xl border border-slate-700 max-w-md w-full text-center space-y-6 transform transition-all hover:scale-105">
         <div className="flex justify-center">
           <div className="bg-indigo-600 p-4 rounded-full shadow-lg shadow-indigo-500/20">
-            <Terminal size={48} className="text-white" />
+            <TerminalIcon size={48} className="text-white" />
           </div>
         </div>
         
@@ -32,6 +33,8 @@ function App() {
           {isConnected ? 'Connected to Server' : 'Disconnected'}
         </div>
       </div>
+      
+      <Terminal />
     </div>
   )
 }
