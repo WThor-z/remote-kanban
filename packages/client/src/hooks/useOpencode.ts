@@ -3,6 +3,7 @@ import { io, Socket } from 'socket.io-client';
 
 let socket: Socket | undefined;
 let socketUrl: string | undefined;
+let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
 const resolveSocketUrl = () => {
   const envUrl = typeof import.meta !== 'undefined'
@@ -18,6 +19,17 @@ const resolveSocketUrl = () => {
   }
 
   return 'http://localhost:3000';
+};
+
+const scheduleReconnect = (delayMs: number) => {
+  if (!socket || reconnectTimer) {
+    return;
+  }
+
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = undefined;
+    socket?.connect();
+  }, delayMs);
 };
 
 export const useOpencode = () => {
@@ -37,6 +49,7 @@ export const useOpencode = () => {
 
     function onDisconnect() {
       setIsConnected(false);
+      scheduleReconnect(500);
     }
 
     socket.on('connect', onConnect);

@@ -53,4 +53,34 @@ describe('useOpencode', () => {
 
     delete process.env.OPENCODE_SOCKET_URL;
   });
+
+  it('schedules a reconnect when disconnected', () => {
+    vi.useFakeTimers();
+
+    const { result } = renderHook(() => useOpencode());
+    const socketMock = io();
+    const onMock = socketMock.on as unknown as ReturnType<typeof vi.fn>;
+
+    const disconnectCall = onMock.mock.calls.find((call) => call[0] === 'disconnect');
+
+    if (!disconnectCall) {
+      throw new Error('disconnect listener not registered');
+    }
+
+    const disconnectCallback = disconnectCall[1];
+
+    act(() => {
+      disconnectCallback();
+    });
+
+    expect(result.current.isConnected).toBe(false);
+
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+
+    expect(socketMock.connect).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
 });
