@@ -33,5 +33,18 @@ describe('ChatView Component', () => {
     render(<ChatView />);
 
     expect(screen.getByText('hello chat')).toBeInTheDocument();
+    expect(screen.getByText('OUTPUT')).toBeInTheDocument();
+  });
+
+  it('renders status label for status messages', () => {
+    mockOnData.mockImplementation((callback: (data: string) => void) => {
+      callback('STATUS: Ready');
+      return vi.fn();
+    });
+
+    render(<ChatView />);
+
+    expect(screen.getByText('STATUS')).toBeInTheDocument();
+    expect(screen.getByText('Ready')).toBeInTheDocument();
   });
 });

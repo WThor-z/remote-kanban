@@ -29,7 +29,7 @@
 ## 输出参数 (Outputs)
 
 - 终端渲染输出: 将服务端发送的字符流写入 `xterm.js` 实例并渲染到 UI。
-- 消息面板输出: `ChatView` 将解析后的消息渲染为列表。
+- 消息面板输出: `ChatView` 将解析后的消息渲染为列表，并显示 `command/log/status/output` 标签。
 - 输入栏输出: `InputBar` 发送用户命令并清空输入框。
 - 连接状态: 通过 `isConnected` 状态向页面展示连接信息。
 
@@ -55,7 +55,7 @@ Server emits: output -> "<directory listing>"
 2. `Terminal` 组件挂载时初始化 `xterm` 与 `FitAddon`，并监听容器尺寸变化。
 3. 用户在终端内输入时，`xterm.onData` 触发并调用 `write`，将字符流发送至服务器。
 4. 服务端通过 `output` 事件推送数据后，`Terminal` 会将内容写入 `xterm` 渲染区。
-5. `ChatView` 订阅相同的输出事件，使用协议 `Parser` 转为消息对象并追加到消息列表。
+5. `ChatView` 订阅相同的输出事件，使用协议 `Parser` 转为带类型的消息对象并追加到消息列表。
 6. `InputBar` 提交时会对输入进行 trim，发送 `\r` 结尾的命令并清空输入框。
 
 ## 其他脚本
