@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useOpencode } from './hooks/useOpencode';
 import { Terminal as TerminalIcon } from 'lucide-react';
 import { Terminal } from './components/Terminal';
@@ -6,6 +7,7 @@ import { InputBar } from './components/InputBar';
 
 function App() {
   const { isConnected } = useOpencode();
+  const [isTerminalOpen, setIsTerminalOpen] = useState(false);
 
   return (
     <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center p-6 gap-8">
@@ -37,7 +39,25 @@ function App() {
       </div>
 
       <div className="w-full max-w-6xl grid grid-cols-1 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] gap-6">
-        <Terminal />
+        <div className="w-full bg-slate-900/60 border border-slate-700/50 rounded-xl overflow-hidden shadow-2xl">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700/60 bg-slate-800/80">
+            <div className="text-sm font-semibold text-slate-200">Terminal</div>
+            <button
+              type="button"
+              onClick={() => setIsTerminalOpen((prev) => !prev)}
+              className="text-xs font-semibold px-3 py-1 rounded-full bg-slate-700/70 text-slate-200 hover:bg-slate-600"
+            >
+              {isTerminalOpen ? 'Collapse' : 'Expand'}
+            </button>
+          </div>
+          {isTerminalOpen ? (
+            <div className="p-4">
+              <Terminal />
+            </div>
+          ) : (
+            <div className="p-6 text-sm text-slate-400">Terminal is hidden. Expand to inspect raw output.</div>
+          )}
+        </div>
         <ChatView />
       </div>
 
