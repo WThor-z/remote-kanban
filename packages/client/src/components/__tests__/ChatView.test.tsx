@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { ChatView } from '../ChatView';
 import { useOpencode } from '../../hooks/useOpencode';
@@ -46,5 +46,49 @@ describe('ChatView Component', () => {
 
     expect(screen.getByText('STATUS')).toBeInTheDocument();
     expect(screen.getByText('Ready')).toBeInTheDocument();
+  });
+
+  it('filters messages by type', () => {
+    mockOnData.mockImplementation((callback: (data: string) => void) => {
+      callback('STATUS: Ready');
+      callback('hello chat');
+      return vi.fn();
+    });
+
+    render(<ChatView />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Status' }));
+
+    expect(screen.getByText('Ready')).toBeInTheDocument();
+    expect(screen.queryByText('hello chat')).not.toBeInTheDocument();
+  });
+
+  it('filters log messages by level', () => {
+    mockOnData.mockImplementation((callback: (data: string) => void) => {
+      callback('[ERROR] Boom');
+      callback('[INFO] All good');
+      return vi.fn();
+    });
+
+    render(<ChatView />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Log' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Error' }));
+
+    expect(screen.getByText('Boom')).toBeInTheDocument();
+    expect(screen.queryByText('All good')).not.toBeInTheDocument();
+  });
+
+  it('groups messages by type when showing all', () => {
+    mockOnData.mockImplementation((callback: (data: string) => void) => {
+      callback('STATUS: Ready');
+      callback('hello chat');
+      return vi.fn();
+    });
+
+    render(<ChatView />);
+
+    expect(screen.getByTestId('chat-group-status')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-group-output')).toBeInTheDocument();
   });
 });
