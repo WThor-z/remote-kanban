@@ -73,7 +73,7 @@ export const Terminal = () => {
   return (
     <div 
       data-testid="terminal-container"
-      className="w-full max-w-4xl h-[500px] bg-slate-900/80 backdrop-blur-xl rounded-xl border border-slate-700/50 shadow-2xl overflow-hidden flex flex-col my-8"
+      className="w-full h-[500px] bg-slate-900/80 backdrop-blur-xl rounded-xl border border-slate-700/50 shadow-2xl overflow-hidden flex flex-col"
     >
       <div className="bg-slate-800/80 p-3 flex items-center justify-between border-b border-slate-700/50 backdrop-blur-md">
         <div className="flex items-center space-x-2">

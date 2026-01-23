@@ -18,9 +18,19 @@
 
 - Props: 当前版本无显式 Props，内部依赖 `useOpencode` 建立通信。
 
+### `ChatView` 组件
+
+- Props: 当前版本无显式 Props，内部依赖 `useOpencode` 订阅输出，并使用协议解析器处理消息。
+
+### `InputBar` 组件
+
+- Props: 当前版本无显式 Props，内部依赖 `useOpencode` 发送输入并读取连接状态。
+
 ## 输出参数 (Outputs)
 
 - 终端渲染输出: 将服务端发送的字符流写入 `xterm.js` 实例并渲染到 UI。
+- 消息面板输出: `ChatView` 将解析后的消息渲染为列表。
+- 输入栏输出: `InputBar` 发送用户命令并清空输入框。
 - 连接状态: 通过 `isConnected` 状态向页面展示连接信息。
 
 ## 使用示例 (Usage Examples)
@@ -35,7 +45,7 @@ npm run dev
 
 ```text
 User types: dir
-Client emits: input -> "dir\r"
+InputBar emits: input -> "dir\r"
 Server emits: output -> "<directory listing>"
 ```
 
@@ -44,7 +54,9 @@ Server emits: output -> "<directory listing>"
 1. `useOpencode` 在首次调用时创建 `socket.io-client` 单例连接，默认连接 `http://localhost:3000`。
 2. `Terminal` 组件挂载时初始化 `xterm` 与 `FitAddon`，并监听容器尺寸变化。
 3. 用户在终端内输入时，`xterm.onData` 触发并调用 `write`，将字符流发送至服务器。
-4. 服务端通过 `output` 事件推送数据后，`onData` 回调会将内容写入 `xterm` 渲染区。
+4. 服务端通过 `output` 事件推送数据后，`Terminal` 会将内容写入 `xterm` 渲染区。
+5. `ChatView` 订阅相同的输出事件，使用协议 `Parser` 转为消息对象并追加到消息列表。
+6. `InputBar` 提交时会对输入进行 trim，发送 `\r` 结尾的命令并清空输入框。
 
 ## 其他脚本
 

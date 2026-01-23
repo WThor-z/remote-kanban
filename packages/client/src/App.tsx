@@ -1,23 +1,25 @@
 import { useOpencode } from './hooks/useOpencode';
 import { Terminal as TerminalIcon } from 'lucide-react';
 import { Terminal } from './components/Terminal';
+import { ChatView } from './components/ChatView';
+import { InputBar } from './components/InputBar';
 
 function App() {
   const { isConnected } = useOpencode();
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-4 gap-8">
-      <div className="bg-slate-800 p-8 rounded-xl shadow-2xl border border-slate-700 max-w-md w-full text-center space-y-6 transform transition-all hover:scale-105">
+    <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center p-6 gap-8">
+      <div className="w-full max-w-6xl bg-slate-800 p-8 rounded-xl shadow-2xl border border-slate-700 text-center space-y-6">
         <div className="flex justify-center">
           <div className="bg-indigo-600 p-4 rounded-full shadow-lg shadow-indigo-500/20">
             <TerminalIcon size={48} className="text-white" />
           </div>
         </div>
-        
+
         <h1 className="text-4xl font-bold bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent">
           Hello Opencode
         </h1>
-        
+
         <p className="text-slate-400 text-lg">
           Welcome to Opencode Vibe Kanban client.
         </p>
@@ -33,8 +35,13 @@ function App() {
           {isConnected ? 'Connected to Server' : 'Disconnected'}
         </div>
       </div>
-      
-      <Terminal />
+
+      <div className="w-full max-w-6xl grid grid-cols-1 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] gap-6">
+        <Terminal />
+        <ChatView />
+      </div>
+
+      <InputBar />
     </div>
   )
 }
