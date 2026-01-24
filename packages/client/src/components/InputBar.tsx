@@ -1,8 +1,11 @@
 import { useState, type FormEvent } from 'react';
 import { useOpencode } from '../hooks/useOpencode';
+import { useKanban } from '../hooks/useKanban';
+import { parseCommand } from '../utils/commandParser';
 
 export const InputBar = () => {
   const { write, isConnected } = useOpencode();
+  const { createTask, moveTask, deleteTask } = useKanban();
   const [value, setValue] = useState('');
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -11,7 +14,27 @@ export const InputBar = () => {
     const trimmed = value.trim();
     if (!trimmed || !isConnected) return;
 
-    write(`${trimmed}\r`);
+    // 尝试解析为 Kanban 指令
+    const command = parseCommand(trimmed);
+    
+    if (command) {
+      // 拦截 Kanban 指令，不发往 PTY
+      switch (command.type) {
+        case 'kanban:create':
+          createTask(command.payload.title, command.payload.description);
+          break;
+        case 'kanban:move':
+          moveTask(command.payload.taskId, command.payload.targetStatus, undefined);
+          break;
+        case 'kanban:delete':
+          deleteTask(command.payload.taskId);
+          break;
+      }
+    } else {
+      // 普通命令，发往 PTY
+      write(`${trimmed}\r`);
+    }
+
     setValue('');
   };
 
@@ -26,7 +49,7 @@ export const InputBar = () => {
         type="text"
         value={value}
         onChange={(event) => setValue(event.target.value)}
-        placeholder={isConnected ? 'Type a command to send to Opencode...' : 'Waiting for server connection...'}
+        placeholder={isConnected ? 'Type a command or /task add <title>...' : 'Waiting for server connection...'}
         className="flex-1 bg-transparent text-slate-100 placeholder:text-slate-500 text-sm focus:outline-none px-3"
       />
       <button

@@ -56,7 +56,35 @@
 *   `ChatView`: 渲染 `protocol` 解析后的结构化消息。
 *   `InputBar`: 移动端优化的指令输入栏。
 
-## 5. Execution Strategy with Parallel Agents (并行执行策略)
+## 5. Phase 4: CLI-Driven Kanban (CLI 驱动看板)
+*目标：实现基于文件持久化的看板功能，支持 CLI 与 UI 双向操作。*
+
+### Task 4.1: Protocol & State Definition
+*   **Description**: 扩展协议以支持看板数据结构。
+*   **Deliverables**:
+    *   定义 `Task`, `Column`, `KanbanBoard` 接口。
+    *   定义 `KANBAN_SYNC`, `KANBAN_MOVE`, `KANBAN_CREATE` 等 WebSocket 事件。
+
+### Task 4.2: Server-Side Persistence
+*   **Description**: 实现服务端状态管理。
+*   **Deliverables**:
+    *   `KanbanManager`: 启动时读取 `.opencode/kanban.json`，无则创建默认。
+    *   支持文件监听：文件变更自动广播给 Client。
+    *   支持指令解析：拦截 `/todo`, `/task` 等命令并更新 JSON。
+
+### Task 4.3: Client Kanban UI
+*   **Description**: 实现拖拽式看板界面。
+*   **Deliverables**:
+    *   `Board` 组件：集成 `@dnd-kit/core` 实现三列布局 (Todo/Doing/Done)。
+    *   `TaskCard` 组件：展示任务详情。
+    *   Optimistic UI：拖拽时立即更新 UI，失败则回滚。
+
+### Task 4.4: Command Integration
+*   **Description**: 前端输入栏支持看板指令。
+*   **Deliverables**:
+    *   拦截 `/task` 等指令，不发往 PTY，而是直接调用 Kanban API。
+
+## 6. Execution Strategy with Parallel Agents (并行执行策略)
 
 一旦项目脚手架搭建完成，可以立即启动 **Parallel Agents**：
 
@@ -64,7 +92,7 @@
 *   **Agent B**: 负责 **Task 1.2 (PTY Manager)** —— Node.js 系统编程，无依赖。
 *   **Agent C**: 负责 **Task 3.1 (Frontend Hooks)** —— 依赖 Protocol 定义的类型。
 
-## 6. Verification Plan (验证计划)
+## 7. Verification Plan (验证计划)
 *   **Unit Tests**: 各个 package 内部的 Jest/Vitest 测试。
 *   **E2E Test**: 启动 Server，模拟 Client 发送 "echo hello"，验证链路通畅。
 

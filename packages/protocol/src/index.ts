@@ -1,6 +1,9 @@
 export type MessageType = 'command' | 'log' | 'status' | 'output';
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
+// Re-export Kanban types and utilities
+export * from './kanban';
+
 export interface Message {
   raw: string;
   content: string;

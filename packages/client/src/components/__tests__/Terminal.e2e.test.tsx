@@ -51,6 +51,17 @@ vi.mock('@opencode-vibe/pty-manager', () => {
   };
 });
 
+// Mock useKanban to prevent interference with InputBar
+vi.mock('../../hooks/useKanban', () => ({
+  useKanban: vi.fn(() => ({
+    board: { tasks: {}, columns: {}, columnOrder: [] },
+    isLoading: false,
+    createTask: vi.fn(),
+    moveTask: vi.fn(),
+    deleteTask: vi.fn(),
+  })),
+}));
+
 describe('Terminal E2E', () => {
   let stopServer: () => void;
   let serverPort: number;

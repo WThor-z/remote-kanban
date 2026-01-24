@@ -12,6 +12,11 @@ export class PtyManager {
 
     const finalOptions = { ...defaultOptions, ...options };
 
+    // On Windows, use conpty: false to avoid AttachConsole errors in some environments
+    if (process.platform === 'win32') {
+      (finalOptions as pty.IWindowsPtyForkOptions).useConpty = false;
+    }
+
     return pty.spawn(file, args, finalOptions);
   }
 
