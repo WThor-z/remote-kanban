@@ -28,26 +28,27 @@ export function startServer(port: number = 3000) {
 
   // Initialize PtyManager - intended for use in future socket events
   const ptyManager = new PtyManager();
-  let activeSession: {
-    socket: Parameters<Parameters<typeof io.on>[1]>[0];
-    shell: ReturnType<PtyManager['spawn']>;
-    subscription: { dispose: () => void };
-  } | null = null;
+  
+  // Track shells per socket to avoid double-kill
+  const shellMap = new Map<string, { shell: ReturnType<PtyManager['spawn']>; subscription: { dispose: () => void }; killed: boolean }>();
 
-  const cleanupSession = () => {
-    if (!activeSession) {
+  const safeKillShell = (socketId: string) => {
+    const entry = shellMap.get(socketId);
+    if (!entry || entry.killed) {
       return;
     }
-
+    
+    entry.killed = true;
     try {
-      activeSession.shell.kill();
-      activeSession.subscription.dispose();
-      activeSession.socket.disconnect(true);
+      entry.subscription.dispose();
+      entry.shell.kill();
     } catch (err) {
-      console.error('Error cleanup shell:', err);
-    } finally {
-      activeSession = null;
+      // Ignore "already killed" errors
+      if (!(err instanceof Error && err.message.includes('already'))) {
+        console.error('Error cleanup shell:', err);
+      }
     }
+    shellMap.delete(socketId);
   };
 
 io.on('connection', (socket) => {
@@ -83,15 +84,10 @@ io.on('connection', (socket) => {
     });
 
     // === PTY Session ===
-    if (activeSession) {
-      socket.emit('output', '\r\n\x1b[33mNotice: Previous session closed.\x1b[0m\r\n');
-      cleanupSession();
-    }
+    // Kill any existing shell for previous connections (single-user mode)
+    shellMap.forEach((_, id) => safeKillShell(id));
     
     // Spawn a shell for this client
-    // For MVP, we spawn a new shell for each connection, 
-    // or we could use a session ID to reconnect to existing PTYs.
-    // Let's keep it simple: One shell per socket.
     try {
       const shellCmd = process.platform === 'win32' ? 'powershell.exe' : 'bash';
       const shell = ptyManager.spawn(shellCmd, [], {
@@ -103,10 +99,13 @@ io.on('connection', (socket) => {
 
       // Handle incoming data from client
       socket.on('input', (data: string) => {
-        try {
-          shell.write(data);
-        } catch (err) {
-          console.error('Error writing to shell:', err);
+        const entry = shellMap.get(socket.id);
+        if (entry && !entry.killed) {
+          try {
+            entry.shell.write(data);
+          } catch (err) {
+            console.error('Error writing to shell:', err);
+          }
         }
       });
 
@@ -115,20 +114,11 @@ io.on('connection', (socket) => {
         socket.emit('output', data);
       });
 
-      activeSession = { socket, shell, subscription };
+      shellMap.set(socket.id, { shell, subscription, killed: false });
 
       socket.on('disconnect', () => {
         console.log('Client disconnected:', socket.id);
-        try {
-          shell.kill();
-          subscription.dispose();
-        } catch (err) {
-          console.error('Error cleanup shell:', err);
-        }
-
-        if (activeSession?.socket.id === socket.id) {
-          activeSession = null;
-        }
+        safeKillShell(socket.id);
       });
     } catch (err) {
       console.error('Failed to spawn shell:', err);
@@ -136,7 +126,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  httpServer.listen(port);
+  httpServer.listen(port, () => {
+    console.log(`Server listening on http://localhost:${port}`);
+  });
 
   return {
     httpServer,

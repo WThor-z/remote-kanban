@@ -127,16 +127,14 @@ describe('Gateway Server', () => {
     });
   });
 
-  it('should disconnect prior client when a new one connects', async () => {
+  it('should spawn separate shells for multiple clients', async () => {
     clientSocket = ioc(`http://localhost:${port}`);
 
     await new Promise<void>((resolve) => {
       clientSocket.on('connect', () => resolve());
     });
 
-    const disconnected = new Promise<void>((resolve) => {
-      clientSocket.on('disconnect', () => resolve());
-    });
+    const initialSpawnCount = spawnMock.mock.calls.length;
 
     secondarySocket = ioc(`http://localhost:${port}`);
 
@@ -144,10 +142,14 @@ describe('Gateway Server', () => {
       secondarySocket?.on('connect', () => resolve());
     });
 
-    await disconnected;
-
-    await waitForCondition(() => killMock.mock.calls.length > 0);
-    expect(killMock).toHaveBeenCalled();
+    // Wait for second shell to spawn
+    await waitForCondition(() => spawnMock.mock.calls.length > initialSpawnCount);
+    
+    // Both clients should remain connected
+    expect(clientSocket.connected).toBe(true);
+    expect(secondarySocket?.connected).toBe(true);
+    
+    // Should have spawned shells for both
     expect(spawnMock.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 });

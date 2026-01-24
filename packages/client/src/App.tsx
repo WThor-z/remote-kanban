@@ -1,12 +1,15 @@
 import { useState } from 'react';
 import { useOpencode } from './hooks/useOpencode';
+import { useKanban } from './hooks/useKanban';
 import { Terminal as TerminalIcon } from 'lucide-react';
 import { Terminal } from './components/Terminal';
 import { ChatView } from './components/ChatView';
 import { InputBar } from './components/InputBar';
+import { KanbanBoard } from './components/kanban/KanbanBoard';
 
 function App() {
   const { isConnected } = useOpencode();
+  const { board, moveTask, deleteTask } = useKanban();
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
 
   return (
@@ -59,6 +62,11 @@ function App() {
           )}
         </div>
         <ChatView />
+      </div>
+
+      {/* Kanban Board */}
+      <div className="w-full max-w-6xl">
+        <KanbanBoard board={board} onMoveTask={moveTask} onDeleteTask={deleteTask} />
       </div>
 
       <InputBar />
