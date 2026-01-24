@@ -2,9 +2,14 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
-import { PtyManager } from '@opencode-vibe/pty-manager';
 import { KanbanStore } from './kanban';
-import type { KanbanTaskStatus } from '@opencode-vibe/protocol';
+import { AgentExecutor, AgentOutputParser } from './agent';
+import { 
+  createAgentSession, 
+  AGENT_PRESETS,
+  type KanbanTaskStatus, 
+  type AgentType
+} from '@opencode-vibe/protocol';
 
 export function startServer(port: number = 3000) {
   const app = express();
@@ -26,32 +31,34 @@ export function startServer(port: number = 3000) {
     io.emit('kanban:sync', state);
   });
 
-  // Initialize PtyManager - intended for use in future socket events
-  const ptyManager = new PtyManager();
-  
-  // Track shells per socket to avoid double-kill
-  const shellMap = new Map<string, { shell: ReturnType<PtyManager['spawn']>; subscription: { dispose: () => void }; killed: boolean }>();
+  // Initialize AgentExecutor and OutputParser
+  const agentExecutor = new AgentExecutor();
+  const agentParser = new AgentOutputParser();
 
-  const safeKillShell = (socketId: string) => {
-    const entry = shellMap.get(socketId);
-    if (!entry || entry.killed) {
-      return;
-    }
+  // Agent event forwarding - output events
+  agentExecutor.onOutput((event) => {
+    io.emit('agent:output', event);
     
-    entry.killed = true;
-    try {
-      entry.subscription.dispose();
-      entry.shell.kill();
-    } catch (err) {
-      // Ignore "already killed" errors
-      if (!(err instanceof Error && err.message.includes('already'))) {
-        console.error('Error cleanup shell:', err);
+    // Parse output for task detection
+    const parseResults = agentParser.parseChunk(event.data);
+    for (const result of parseResults) {
+      if (result.taskDetected) {
+        io.emit('agent:task-detected', {
+          sessionId: event.sessionId,
+          action: result.taskDetected.action,
+          taskTitle: result.taskDetected.taskTitle,
+          timestamp: Date.now(),
+        });
       }
     }
-    shellMap.delete(socketId);
-  };
+  });
 
-io.on('connection', (socket) => {
+  // Agent event forwarding - status events
+  agentExecutor.onStatus((event) => {
+    io.emit('agent:status', event);
+  });
+
+  io.on('connection', (socket) => {
     console.log('Client connected:', socket.id);
 
     // === Kanban Events ===
@@ -83,47 +90,54 @@ io.on('connection', (socket) => {
       }
     });
 
-    // === PTY Session ===
-    // Kill any existing shell for previous connections (single-user mode)
-    shellMap.forEach((_, id) => safeKillShell(id));
-    
-    // Spawn a shell for this client
-    try {
-      const shellCmd = process.platform === 'win32' ? 'powershell.exe' : 'bash';
-      const shell = ptyManager.spawn(shellCmd, [], {
-        cols: 80,
-        rows: 24,
-        cwd: process.cwd(),
-        env: process.env as Record<string, string>
-      });
-
-      // Handle incoming data from client
-      socket.on('input', (data: string) => {
-        const entry = shellMap.get(socket.id);
-        if (entry && !entry.killed) {
-          try {
-            entry.shell.write(data);
-          } catch (err) {
-            console.error('Error writing to shell:', err);
-          }
+    // === Agent Events ===
+    socket.on('agent:start', async (payload: { agentType: AgentType; prompt: string; taskId?: string }) => {
+      try {
+        const { agentType, prompt, taskId } = payload;
+        const preset = AGENT_PRESETS[agentType];
+        
+        if (!preset) {
+          socket.emit('agent:error', { message: `Unknown agent type: ${agentType}` });
+          return;
         }
-      });
 
-      // Handle outgoing data from shell
-      const subscription = shell.onData((data: string) => {
-        socket.emit('output', data);
-      });
+        const session = createAgentSession(agentType, prompt, taskId);
+        const config = { ...preset, cwd: process.cwd() };
+        
+        // Start is now async - emit session immediately, then start
+        socket.emit('agent:session', session);
+        
+        // Start the agent (async - will emit events via agentExecutor event handlers)
+        await agentExecutor.start(session, config);
+      } catch (err) {
+        socket.emit('agent:error', { message: (err as Error).message });
+      }
+    });
 
-      shellMap.set(socket.id, { shell, subscription, killed: false });
+    socket.on('agent:stop', async (payload: { sessionId: string }) => {
+      try {
+        await agentExecutor.stop(payload.sessionId);
+        socket.emit('agent:session', agentExecutor.getSession(payload.sessionId));
+      } catch (err) {
+        socket.emit('agent:error', { sessionId: payload.sessionId, message: (err as Error).message });
+      }
+    });
 
-      socket.on('disconnect', () => {
-        console.log('Client disconnected:', socket.id);
-        safeKillShell(socket.id);
-      });
-    } catch (err) {
-      console.error('Failed to spawn shell:', err);
-      socket.emit('output', '\r\n\x1b[31mError: Failed to spawn shell process.\x1b[0m\r\n');
-    }
+    socket.on('agent:input', (payload: { sessionId: string; data: string }) => {
+      try {
+        agentExecutor.write(payload.sessionId, payload.data);
+      } catch (err) {
+        socket.emit('agent:error', { sessionId: payload.sessionId, message: (err as Error).message });
+      }
+    });
+
+    socket.on('agent:list', () => {
+      socket.emit('agent:sessions', agentExecutor.getAllSessions());
+    });
+
+    socket.on('disconnect', () => {
+      console.log('Client disconnected:', socket.id);
+    });
   });
 
   httpServer.listen(port, () => {

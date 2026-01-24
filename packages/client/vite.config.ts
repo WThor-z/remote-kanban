@@ -8,6 +8,11 @@ export default defineConfig({
   optimizeDeps: {
     include: ['@opencode-vibe/protocol'],
   },
+  build: {
+    commonjsOptions: {
+      include: [/@opencode-vibe\/protocol/, /node_modules/],
+    },
+  },
   test: {
     environment: 'jsdom',
     globals: true,

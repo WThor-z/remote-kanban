@@ -4,7 +4,7 @@ import { useKanban } from '../hooks/useKanban';
 import { parseCommand } from '../utils/commandParser';
 
 export const InputBar = () => {
-  const { write, isConnected } = useOpencode();
+  const { isConnected } = useOpencode();
   const { createTask, moveTask, deleteTask } = useKanban();
   const [value, setValue] = useState('');
 
@@ -14,11 +14,10 @@ export const InputBar = () => {
     const trimmed = value.trim();
     if (!trimmed || !isConnected) return;
 
-    // 尝试解析为 Kanban 指令
+    // 解析为 Kanban 指令
     const command = parseCommand(trimmed);
     
     if (command) {
-      // 拦截 Kanban 指令，不发往 PTY
       switch (command.type) {
         case 'kanban:create':
           createTask(command.payload.title, command.payload.description);
@@ -30,9 +29,10 @@ export const InputBar = () => {
           deleteTask(command.payload.taskId);
           break;
       }
+      setValue('');
     } else {
-      // 普通命令，发往 PTY
-      write(`${trimmed}\r`);
+      // 非 Kanban 命令 - 提示用户使用 Agent Panel
+      console.log('Use the AI Agent panel above for AI interactions');
     }
 
     setValue('');
@@ -49,7 +49,7 @@ export const InputBar = () => {
         type="text"
         value={value}
         onChange={(event) => setValue(event.target.value)}
-        placeholder={isConnected ? 'Type a command or /task add <title>...' : 'Waiting for server connection...'}
+        placeholder={isConnected ? 'Type /task add <title> to create a task...' : 'Waiting for server connection...'}
         className="flex-1 bg-transparent text-slate-100 placeholder:text-slate-500 text-sm focus:outline-none px-3"
       />
       <button

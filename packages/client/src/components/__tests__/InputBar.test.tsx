@@ -4,7 +4,6 @@ import { InputBar } from '../InputBar';
 import { useOpencode } from '../../hooks/useOpencode';
 import { useKanban } from '../../hooks/useKanban';
 
-const mockWrite = vi.fn();
 const mockCreateTask = vi.fn();
 const mockMoveTask = vi.fn();
 const mockDeleteTask = vi.fn();
@@ -22,7 +21,6 @@ describe('InputBar Component', () => {
     vi.clearAllMocks();
     (useOpencode as Mock).mockReturnValue({
       isConnected: true,
-      write: mockWrite,
     });
     (useKanban as Mock).mockReturnValue({
       createTask: mockCreateTask,
@@ -31,7 +29,32 @@ describe('InputBar Component', () => {
     });
   });
 
-  it('sends input with a carriage return', () => {
+  it('clears input after submission', () => {
+    render(<InputBar />);
+
+    const input = screen.getByTestId('input-bar-input') as HTMLInputElement;
+    const form = screen.getByTestId('input-bar-form');
+
+    fireEvent.change(input, { target: { value: '/task add test' } });
+    fireEvent.submit(form);
+
+    expect(input.value).toBe('');
+  });
+
+  it('disables sending when disconnected', () => {
+    (useOpencode as Mock).mockReturnValue({
+      isConnected: false,
+    });
+
+    render(<InputBar />);
+
+    const button = screen.getByTestId('input-bar-submit');
+    expect(button).toBeDisabled();
+  });
+
+  it('does nothing for non-kanban commands', () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    
     render(<InputBar />);
 
     const input = screen.getByTestId('input-bar-input') as HTMLInputElement;
@@ -40,27 +63,16 @@ describe('InputBar Component', () => {
     fireEvent.change(input, { target: { value: 'ls' } });
     fireEvent.submit(form);
 
-    expect(mockWrite).toHaveBeenCalledWith('ls\r');
+    // Should log a message about using AI Agent panel
+    expect(consoleSpy).toHaveBeenCalled();
+    expect(mockCreateTask).not.toHaveBeenCalled();
     expect(input.value).toBe('');
-  });
-
-  it('disables sending when disconnected', () => {
-    (useOpencode as Mock).mockReturnValue({
-      isConnected: false,
-      write: mockWrite,
-    });
-
-    render(<InputBar />);
-
-    const button = screen.getByTestId('input-bar-submit');
-    expect(button).toBeDisabled();
-
-    fireEvent.submit(screen.getByTestId('input-bar-form'));
-    expect(mockWrite).not.toHaveBeenCalled();
+    
+    consoleSpy.mockRestore();
   });
 
   describe('Kanban 指令拦截', () => {
-    it('/task add 指令调用 createTask 而非 write', () => {
+    it('/task add 指令调用 createTask', () => {
       render(<InputBar />);
 
       const input = screen.getByTestId('input-bar-input') as HTMLInputElement;
@@ -70,7 +82,6 @@ describe('InputBar Component', () => {
       fireEvent.submit(form);
 
       expect(mockCreateTask).toHaveBeenCalledWith('新任务', undefined);
-      expect(mockWrite).not.toHaveBeenCalled();
       expect(input.value).toBe('');
     });
 
@@ -84,7 +95,6 @@ describe('InputBar Component', () => {
       fireEvent.submit(form);
 
       expect(mockCreateTask).toHaveBeenCalledWith('待办事项', undefined);
-      expect(mockWrite).not.toHaveBeenCalled();
     });
 
     it('/task move 指令调用 moveTask', () => {
@@ -97,7 +107,6 @@ describe('InputBar Component', () => {
       fireEvent.submit(form);
 
       expect(mockMoveTask).toHaveBeenCalledWith('task-123', 'doing', undefined);
-      expect(mockWrite).not.toHaveBeenCalled();
     });
 
     it('/task delete 指令调用 deleteTask', () => {
@@ -110,7 +119,6 @@ describe('InputBar Component', () => {
       fireEvent.submit(form);
 
       expect(mockDeleteTask).toHaveBeenCalledWith('task-456');
-      expect(mockWrite).not.toHaveBeenCalled();
     });
   });
 });

@@ -3,7 +3,16 @@
   "version": "1.0.0",
   "description": "Shared Types and Parsing logic for Opencode Vibe Kanban",
   "main": "dist/index.js",
+  "module": "dist/index.js",
   "types": "dist/index.d.ts",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
   "scripts": {
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
@@ -12,7 +21,6 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "devDependencies": {
     "@vitest/coverage-v8": "^4.0.18",
     "typescript": "^5.9.3",

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 
 let socket: Socket | undefined;
@@ -68,20 +68,5 @@ export const useOpencode = () => {
     };
   }, [url]);
 
-  const write = useCallback((data: string) => {
-    socket?.emit('input', data);
-  }, []);
-
-  const onData = useCallback((callback: (data: string) => void) => {
-    if (!socket) return () => {};
-
-    const handler = (data: string) => callback(data);
-    socket.on('output', handler);
-
-    return () => {
-      socket?.off('output', handler);
-    };
-  }, []);
-
-  return { isConnected, socket, write, onData };
+  return { isConnected, socket };
 };
