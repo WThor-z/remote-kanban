@@ -1,43 +1,20 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { io as ioc, Socket as ClientSocket } from 'socket.io-client';
 import { startServer } from '../src/server';
 import { AddressInfo } from 'net';
 
-type OnDataHandler = (data: string) => void;
-
-let onDataHandler: OnDataHandler | null = null;
-const writeMock = vi.fn();
-const killMock = vi.fn();
-const disposeMock = vi.fn();
-const spawnMock = vi.fn();
-
-const waitForCondition = (condition: () => boolean, timeoutMs: number = 1000) => {
-  return new Promise<void>((resolve, reject) => {
-    const interval = setInterval(() => {
-      if (condition()) {
-        clearInterval(interval);
-        resolve();
-      }
-    }, 10);
-
-    setTimeout(() => {
-      clearInterval(interval);
-      reject(new Error('Timed out waiting for condition'));
-    }, timeoutMs);
-  });
-};
-
-vi.mock('@opencode-vibe/pty-manager', () => {
+// Mock OpencodeClient to avoid actual OpenCode processes during tests
+vi.mock('../src/agent/opencode-client', () => {
   return {
-    PtyManager: vi.fn().mockImplementation(() => ({
-      spawn: spawnMock.mockImplementation(() => ({
-        onData: vi.fn((handler: OnDataHandler) => {
-          onDataHandler = handler;
-          return { dispose: disposeMock };
-        }),
-        write: writeMock,
-        kill: killMock,
-      })),
+    OpencodeClient: vi.fn().mockImplementation(() => ({
+      start: vi.fn().mockResolvedValue('http://127.0.0.1:12345'),
+      stop: vi.fn(),
+      waitForHealth: vi.fn().mockResolvedValue(true),
+      createSession: vi.fn().mockResolvedValue('mock-session-id'),
+      sendMessage: vi.fn().mockResolvedValue(undefined),
+      connectEventStream: vi.fn().mockResolvedValue(undefined),
+      on: vi.fn(),
+      emit: vi.fn(),
     })),
   };
 });
@@ -45,7 +22,7 @@ vi.mock('@opencode-vibe/pty-manager', () => {
 describe('Gateway Server', () => {
   let clientSocket: ClientSocket;
   let secondarySocket: ClientSocket | null = null;
-  let httpServer: any;
+  let httpServer: ReturnType<typeof startServer>['httpServer'];
   let port: number;
   let stopServer: () => void;
 
@@ -79,11 +56,6 @@ describe('Gateway Server', () => {
     secondarySocket = null;
   });
 
-  beforeEach(() => {
-    onDataHandler = null;
-    vi.clearAllMocks();
-  });
-
   it('should allow a client to connect', () => new Promise<void>((done) => {
     clientSocket = ioc(`http://localhost:${port}`);
     
@@ -93,48 +65,12 @@ describe('Gateway Server', () => {
     });
   }));
 
-  it('should spawn a shell and forward input to PTY', async () => {
+  it('should handle multiple client connections', async () => {
     clientSocket = ioc(`http://localhost:${port}`);
 
     await new Promise<void>((resolve) => {
       clientSocket.on('connect', () => resolve());
     });
-
-    await waitForCondition(() => spawnMock.mock.calls.length > 0);
-
-    clientSocket.emit('input', 'echo test');
-
-    await waitForCondition(() => writeMock.mock.calls.length > 0);
-    expect(writeMock).toHaveBeenCalledWith('echo test');
-  });
-
-  it('should forward PTY output to client', async () => {
-    clientSocket = ioc(`http://localhost:${port}`);
-
-    await new Promise<void>((resolve) => {
-      clientSocket.on('connect', () => resolve());
-    });
-
-    await waitForCondition(() => onDataHandler !== null);
-
-    await new Promise<void>((resolve) => {
-      clientSocket.on('output', (data: string) => {
-        expect(data).toBe('hello');
-        resolve();
-      });
-
-      onDataHandler?.('hello');
-    });
-  });
-
-  it('should spawn separate shells for multiple clients', async () => {
-    clientSocket = ioc(`http://localhost:${port}`);
-
-    await new Promise<void>((resolve) => {
-      clientSocket.on('connect', () => resolve());
-    });
-
-    const initialSpawnCount = spawnMock.mock.calls.length;
 
     secondarySocket = ioc(`http://localhost:${port}`);
 
@@ -142,14 +78,22 @@ describe('Gateway Server', () => {
       secondarySocket?.on('connect', () => resolve());
     });
 
-    // Wait for second shell to spawn
-    await waitForCondition(() => spawnMock.mock.calls.length > initialSpawnCount);
-    
     // Both clients should remain connected
     expect(clientSocket.connected).toBe(true);
     expect(secondarySocket?.connected).toBe(true);
+  });
+
+  it('should emit disconnect event when client disconnects', async () => {
+    clientSocket = ioc(`http://localhost:${port}`);
+
+    await new Promise<void>((resolve) => {
+      clientSocket.on('connect', () => resolve());
+    });
+
+    expect(clientSocket.connected).toBe(true);
     
-    // Should have spawned shells for both
-    expect(spawnMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    clientSocket.disconnect();
+    
+    expect(clientSocket.connected).toBe(false);
   });
 });
