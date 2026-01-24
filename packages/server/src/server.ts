@@ -191,11 +191,29 @@ export async function startServer(port: number = 3000) {
 
     socket.on('task:history', async (payload: { taskId: string }) => {
       try {
-        const history = await taskSessionManager.getHistory(payload.taskId);
+        let history = await taskSessionManager.getHistory(payload.taskId);
+        
+        // 如果没有历史，为新任务创建一个初始的空历史
+        if (!history) {
+          const state = kanbanStore.getState();
+          const task = state.tasks[payload.taskId];
+          if (task) {
+            history = {
+              taskId: payload.taskId,
+              sessionId: '',
+              title: task.title,
+              description: task.description || task.title,
+              messages: [],
+              status: 'idle',
+              createdAt: task.createdAt,
+            };
+          }
+        }
+        
         if (history) {
           socket.emit('task:history', history);
         } else {
-          socket.emit('task:error', { taskId: payload.taskId, error: 'No history found' });
+          socket.emit('task:error', { taskId: payload.taskId, error: 'Task not found' });
         }
       } catch (err) {
         socket.emit('task:error', { taskId: payload.taskId, error: (err as Error).message });
