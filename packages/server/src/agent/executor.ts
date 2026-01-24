@@ -125,7 +125,17 @@ export class AgentExecutor {
       await eventPromise;
 
     } catch (error) {
+      // 确保错误被正确抛出，让上层处理
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`[AgentExecutor] Session ${sessionId} failed:`, errorMessage);
       throw error;
+    } finally {
+      // 确保清理资源
+      try {
+        client.stop();
+      } catch {
+        // 忽略清理错误
+      }
     }
   }
 

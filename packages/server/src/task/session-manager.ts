@@ -143,10 +143,20 @@ export class TaskSessionManager {
         cwd: process.cwd(),
       });
     } catch (error) {
-      // 启动失败
+      // 启动失败 - 更新历史状态
       history.status = 'failed';
+      history.completedAt = Date.now();
       history.error = error instanceof Error ? error.message : String(error);
       await this.saveHistory(history);
+      
+      // 任务状态回到 todo
+      this.updateTaskStatus(taskId, 'todo');
+      
+      // 清理映射
+      this.cleanupTask(taskId);
+      
+      // 发送错误和状态事件
+      this.emit('status', { taskId, status: 'failed' });
       this.emit('error', { taskId, error: history.error });
     }
   }
