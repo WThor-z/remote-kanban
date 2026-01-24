@@ -1,13 +1,56 @@
+import { useState } from 'react';
 import { useOpencode } from './hooks/useOpencode';
 import { useKanban } from './hooks/useKanban';
+import { useTaskSession } from './hooks/useTaskSession';
 import { Bot } from 'lucide-react';
 import { InputBar } from './components/InputBar';
 import { KanbanBoard } from './components/kanban/KanbanBoard';
 import { AgentPanel } from './components/agent';
+import { TaskDetailPanel } from './components/task';
+import type { KanbanTask } from '@opencode-vibe/protocol';
 
 function App() {
-  const { isConnected } = useOpencode();
+  const { isConnected, socket } = useOpencode();
   const { board, moveTask, deleteTask } = useKanban();
+  const [selectedTask, setSelectedTask] = useState<KanbanTask | null>(null);
+
+  const {
+    history,
+    status,
+    isLoading,
+    error,
+    selectTask,
+    executeTask,
+    stopTask,
+    sendMessage,
+  } = useTaskSession({ socket, isConnected });
+
+  // 获取正在执行的任务 ID 列表
+  const executingTaskIds = Object.values(board.tasks)
+    .filter(task => task.status === 'doing')
+    .map(task => task.id);
+
+  const handleTaskClick = (task: KanbanTask) => {
+    setSelectedTask(task);
+    selectTask(task.id);
+  };
+
+  const handleCloseDetail = () => {
+    setSelectedTask(null);
+    selectTask(null);
+  };
+
+  const handleExecuteTask = (taskId: string) => {
+    executeTask(taskId);
+  };
+
+  const handleStopTask = (taskId: string) => {
+    stopTask(taskId);
+  };
+
+  const handleSendMessage = (taskId: string, content: string) => {
+    sendMessage(taskId, content);
+  };
 
   return (
     <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center p-6 gap-8">
@@ -43,12 +86,33 @@ function App() {
         <AgentPanel />
       </div>
 
-      {/* Kanban Board */}
+{/* Kanban Board */}
       <div className="w-full max-w-6xl">
-        <KanbanBoard board={board} onMoveTask={moveTask} onDeleteTask={deleteTask} />
+        <KanbanBoard 
+          board={board} 
+          onMoveTask={moveTask} 
+          onDeleteTask={deleteTask}
+          onTaskClick={handleTaskClick}
+          executingTaskIds={executingTaskIds}
+        />
       </div>
 
       <InputBar />
+
+      {/* Task Detail Panel (Modal) */}
+      {selectedTask && (
+        <TaskDetailPanel
+          task={selectedTask}
+          history={history}
+          status={status}
+          isLoading={isLoading}
+          error={error}
+          onClose={handleCloseDetail}
+          onExecute={handleExecuteTask}
+          onStop={handleStopTask}
+          onSendMessage={handleSendMessage}
+        />
+      )}
     </div>
   )
 }

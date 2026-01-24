@@ -2,16 +2,20 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
+import * as path from 'path';
 import { KanbanStore } from './kanban';
 import { AgentExecutor, AgentOutputParser } from './agent';
+import { TaskSessionManager } from './task';
 import { 
   createAgentSession, 
   AGENT_PRESETS,
   type KanbanTaskStatus, 
-  type AgentType
+  type AgentType,
+  type ChatMessage,
+  type AgentSessionStatus,
 } from '@opencode-vibe/protocol';
 
-export function startServer(port: number = 3000) {
+export async function startServer(port: number = 3000) {
   const app = express();
   app.use(cors());
 
@@ -34,6 +38,31 @@ export function startServer(port: number = 3000) {
   // Initialize AgentExecutor and OutputParser
   const agentExecutor = new AgentExecutor();
   const agentParser = new AgentOutputParser();
+
+  // Initialize TaskSessionManager
+  const tasksDir = path.join(process.cwd(), '.opencode', 'tasks');
+  const taskSessionManager = new TaskSessionManager({
+    tasksDir,
+    kanbanStore,
+    agentExecutor,
+  });
+  await taskSessionManager.initialize();
+
+  // TaskSessionManager event forwarding
+  taskSessionManager.on('status', (payload) => {
+    const { taskId, status } = payload as { taskId: string; status: AgentSessionStatus };
+    io.emit('task:status', { taskId, status });
+  });
+
+  taskSessionManager.on('message', (payload) => {
+    const { taskId, message } = payload as { taskId: string; message: ChatMessage };
+    io.emit('task:message', { taskId, message });
+  });
+
+  taskSessionManager.on('error', (payload) => {
+    const { taskId, error } = payload as { taskId: string; error: string };
+    io.emit('task:error', { taskId, error });
+  });
 
   // Agent event forwarding - output events
   agentExecutor.onOutput((event) => {
@@ -133,6 +162,44 @@ export function startServer(port: number = 3000) {
 
     socket.on('agent:list', () => {
       socket.emit('agent:sessions', agentExecutor.getAllSessions());
+    });
+
+    // === Task Session Events (Task-Agent Integration) ===
+    socket.on('task:execute', async (payload: { taskId: string }) => {
+      try {
+        await taskSessionManager.executeTask(payload.taskId);
+      } catch (err) {
+        socket.emit('task:error', { taskId: payload.taskId, error: (err as Error).message });
+      }
+    });
+
+    socket.on('task:stop', async (payload: { taskId: string }) => {
+      try {
+        await taskSessionManager.stopTask(payload.taskId);
+      } catch (err) {
+        socket.emit('task:error', { taskId: payload.taskId, error: (err as Error).message });
+      }
+    });
+
+    socket.on('task:message', async (payload: { taskId: string; content: string }) => {
+      try {
+        await taskSessionManager.sendMessage(payload.taskId, payload.content);
+      } catch (err) {
+        socket.emit('task:error', { taskId: payload.taskId, error: (err as Error).message });
+      }
+    });
+
+    socket.on('task:history', async (payload: { taskId: string }) => {
+      try {
+        const history = await taskSessionManager.getHistory(payload.taskId);
+        if (history) {
+          socket.emit('task:history', history);
+        } else {
+          socket.emit('task:error', { taskId: payload.taskId, error: 'No history found' });
+        }
+      } catch (err) {
+        socket.emit('task:error', { taskId: payload.taskId, error: (err as Error).message });
+      }
     });
 
     socket.on('disconnect', () => {

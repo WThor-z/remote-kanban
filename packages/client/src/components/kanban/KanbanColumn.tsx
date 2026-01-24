@@ -8,9 +8,11 @@ interface KanbanColumnProps {
   column: ColumnType;
   tasks: KanbanTask[];
   onDeleteTask: (taskId: string) => void;
+  onTaskClick?: (task: KanbanTask) => void;
+  executingTaskIds?: string[];
 }
 
-export const KanbanColumn = ({ column, tasks, onDeleteTask }: KanbanColumnProps) => {
+export const KanbanColumn = ({ column, tasks, onDeleteTask, onTaskClick, executingTaskIds = [] }: KanbanColumnProps) => {
   const { setNodeRef, isOver } = useDroppable({
     id: column.id,
   });
@@ -45,8 +47,14 @@ export const KanbanColumn = ({ column, tasks, onDeleteTask }: KanbanColumnProps)
         {tasks.length === 0 ? (
           <div className="text-xs text-slate-500 text-center py-8">暂无任务</div>
         ) : (
-          tasks.map((task) => (
-            <SortableTaskCard key={task.id} task={task} onDelete={onDeleteTask} />
+tasks.map((task) => (
+            <SortableTaskCard 
+              key={task.id} 
+              task={task} 
+              onDelete={onDeleteTask}
+              onClick={onTaskClick}
+              isExecuting={executingTaskIds.includes(task.id)}
+            />
           ))
         )}
       </div>
@@ -58,9 +66,11 @@ export const KanbanColumn = ({ column, tasks, onDeleteTask }: KanbanColumnProps)
 interface SortableTaskCardProps {
   task: KanbanTask;
   onDelete: (taskId: string) => void;
+  onClick?: (task: KanbanTask) => void;
+  isExecuting?: boolean;
 }
 
-const SortableTaskCard = ({ task, onDelete }: SortableTaskCardProps) => {
+const SortableTaskCard = ({ task, onDelete, onClick, isExecuting }: SortableTaskCardProps) => {
   const {
     attributes,
     listeners,
@@ -77,7 +87,13 @@ const SortableTaskCard = ({ task, onDelete }: SortableTaskCardProps) => {
 
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
-      <TaskCard task={task} onDelete={onDelete} isDragging={isDragging} />
+      <TaskCard 
+        task={task} 
+        onDelete={onDelete} 
+        onClick={onClick}
+        isDragging={isDragging}
+        isExecuting={isExecuting}
+      />
     </div>
   );
 };

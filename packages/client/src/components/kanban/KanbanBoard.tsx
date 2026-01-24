@@ -15,7 +15,7 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
-import type { KanbanBoardState, KanbanTaskStatus } from '@opencode-vibe/protocol';
+import type { KanbanBoardState, KanbanTaskStatus, KanbanTask } from '@opencode-vibe/protocol';
 import { KanbanColumn } from './KanbanColumn';
 import { TaskCard } from './TaskCard';
 
@@ -23,9 +23,11 @@ interface KanbanBoardProps {
   board: KanbanBoardState;
   onMoveTask: (taskId: string, targetStatus: KanbanTaskStatus, targetIndex?: number) => void;
   onDeleteTask: (taskId: string) => void;
+  onTaskClick?: (task: KanbanTask) => void;
+  executingTaskIds?: string[];
 }
 
-export const KanbanBoard = ({ board, onMoveTask, onDeleteTask }: KanbanBoardProps) => {
+export const KanbanBoard = ({ board, onMoveTask, onDeleteTask, onTaskClick, executingTaskIds = [] }: KanbanBoardProps) => {
   const [activeId, setActiveId] = useState<string | null>(null);
 
   const sensors = useSensors(
@@ -92,10 +94,12 @@ export const KanbanBoard = ({ board, onMoveTask, onDeleteTask }: KanbanBoardProp
               items={column.taskIds}
               strategy={verticalListSortingStrategy}
             >
-              <KanbanColumn
+<KanbanColumn
                 column={column}
                 tasks={tasks}
                 onDeleteTask={onDeleteTask}
+                onTaskClick={onTaskClick}
+                executingTaskIds={executingTaskIds}
               />
             </SortableContext>
           );

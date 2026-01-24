@@ -6,6 +6,9 @@ export interface KanbanTask {
   status: KanbanTaskStatus;
   description?: string;
   createdAt: number;
+  updatedAt?: number;
+  /** 关联的 Agent 会话 ID */
+  sessionId?: string;
 }
 
 export interface KanbanColumn {
