@@ -7,12 +7,12 @@ import type { KanbanBoardState } from '@opencode-vibe/protocol';
 // 由于 KanbanManager 需要真实文件系统，这里使用 mock
 
 describe('Kanban Socket Events', () => {
-  let server: ReturnType<typeof startServer>;
+  let server: Awaited<ReturnType<typeof startServer>>;
   let client: Socket;
   const PORT = 3099;
 
-  beforeAll(() => {
-    server = startServer(PORT);
+  beforeAll(async () => {
+    server = await startServer(PORT);
   });
 
   afterAll(() => {

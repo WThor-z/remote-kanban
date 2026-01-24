@@ -191,3 +191,112 @@ export const formatSessionDuration = (session: AgentSession): string => {
   const mins = Math.floor((duration % 3600) / 60);
   return `${hours}h ${mins}m`;
 };
+
+// ============ Task Session History (持久化) ============
+
+/** 消息角色 */
+export type MessageRole = 'user' | 'assistant' | 'system';
+
+/** 对话消息 */
+export interface ChatMessage {
+  id: string;
+  role: MessageRole;
+  content: string;
+  timestamp: number;
+  /** 消息类型：text, tool_use, tool_result, thinking 等 */
+  type?: string;
+  /** 工具调用信息 */
+  toolCall?: {
+    name: string;
+    input: Record<string, unknown>;
+  };
+  /** 工具结果 */
+  toolResult?: {
+    success: boolean;
+    output: string;
+  };
+}
+
+/** 任务会话历史 - 存储在 .opencode/tasks/{taskId}.json */
+export interface TaskSessionHistory {
+  /** 任务 ID */
+  taskId: string;
+  /** 任务标题 */
+  title: string;
+  /** 任务描述 (初始 Prompt) */
+  description: string;
+  /** 会话 ID */
+  sessionId: string;
+  /** 会话状态 */
+  status: AgentSessionStatus;
+  /** 对话历史 */
+  messages: ChatMessage[];
+  /** 创建时间 */
+  createdAt: number;
+  /** 开始执行时间 */
+  startedAt?: number;
+  /** 完成时间 */
+  completedAt?: number;
+  /** 错误信息 */
+  error?: string;
+  /** 统计信息 */
+  stats?: {
+    totalTokens?: number;
+    duration?: number;
+    toolCalls?: number;
+  };
+}
+
+/** 创建空的任务会话历史 */
+export const createTaskSessionHistory = (
+  taskId: string,
+  title: string,
+  description: string
+): TaskSessionHistory => ({
+  taskId,
+  title,
+  description,
+  sessionId: `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  status: 'idle',
+  messages: [],
+  createdAt: Date.now(),
+});
+
+/** 生成消息 ID */
+export const generateMessageId = (): string => {
+  return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+};
+
+// ============ Task Session Events ============
+
+/** 任务会话事件类型 */
+export type TaskSessionEventType =
+  | 'task:execute'      // 开始执行任务
+  | 'task:message'      // 新消息
+  | 'task:complete'     // 任务完成
+  | 'task:fail'         // 任务失败
+  | 'task:history';     // 获取历史
+
+/** Client → Server: 任务会话事件 */
+export interface TaskSessionClientEvents {
+  /** 开始执行任务 */
+  'task:execute': (payload: { taskId: string }) => void;
+  /** 发送用户消息 */
+  'task:message': (payload: { taskId: string; content: string }) => void;
+  /** 停止任务执行 */
+  'task:stop': (payload: { taskId: string }) => void;
+  /** 获取任务历史 */
+  'task:history': (payload: { taskId: string }) => void;
+}
+
+/** Server → Client: 任务会话事件 */
+export interface TaskSessionServerEvents {
+  /** 任务状态变更 */
+  'task:status': (payload: { taskId: string; status: AgentSessionStatus }) => void;
+  /** 新消息 */
+  'task:message': (payload: { taskId: string; message: ChatMessage }) => void;
+  /** 任务历史 */
+  'task:history': (payload: TaskSessionHistory) => void;
+  /** 任务错误 */
+  'task:error': (payload: { taskId: string; error: string }) => void;
+}

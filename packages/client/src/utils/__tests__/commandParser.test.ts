@@ -21,6 +21,35 @@ describe('parseCommand', () => {
       });
     });
 
+    // 简洁格式测试
+    it('解析 /task <title> 简洁格式', () => {
+      const result = parseCommand('/task 新任务');
+      
+      expect(result).not.toBeNull();
+      expect(result?.type).toBe('kanban:create');
+      expect(result?.payload).toEqual({ title: '新任务' });
+    });
+
+    it('解析 /task <title> | <description> 格式', () => {
+      const result = parseCommand('/task 添加功能 | 详细描述');
+      
+      expect(result?.type).toBe('kanban:create');
+      expect(result?.payload).toEqual({ 
+        title: '添加功能',
+        description: '详细描述',
+      });
+    });
+
+    it('解析 /task <title> -- <description> 格式', () => {
+      const result = parseCommand('/task 修复Bug -- 这是一个严重的问题');
+      
+      expect(result?.type).toBe('kanban:create');
+      expect(result?.payload).toEqual({ 
+        title: '修复Bug',
+        description: '这是一个严重的问题',
+      });
+    });
+
     it('解析 /todo 指令 (别名)', () => {
       const result = parseCommand('/todo 待办事项');
       
@@ -72,8 +101,14 @@ describe('parseCommand', () => {
 
     it('无效的 /task 子命令返回 null', () => {
       expect(parseCommand('/task')).toBeNull();
-      expect(parseCommand('/task unknown')).toBeNull();
       expect(parseCommand('/task add')).toBeNull(); // 缺少标题
+    });
+
+    it('/task <非子命令> 会被解析为创建任务', () => {
+      // /task unknown 现在会创建标题为 "unknown" 的任务
+      const result = parseCommand('/task unknown');
+      expect(result?.type).toBe('kanban:create');
+      expect(result?.payload).toEqual({ title: 'unknown' });
     });
 
     it('无效的 /task move 返回 null', () => {

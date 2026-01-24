@@ -22,13 +22,13 @@ vi.mock('../src/agent/opencode-client', () => {
 describe('Gateway Server', () => {
   let clientSocket: ClientSocket;
   let secondarySocket: ClientSocket | null = null;
-  let httpServer: ReturnType<typeof startServer>['httpServer'];
+  let httpServer: Awaited<ReturnType<typeof startServer>>['httpServer'];
   let port: number;
   let stopServer: () => void;
 
   beforeAll(async () => {
     // Start the server on port 0 for random available port
-    const app = startServer(0);
+    const app = await startServer(0);
     httpServer = app.httpServer;
     stopServer = app.stop;
     
@@ -37,6 +37,11 @@ describe('Gateway Server', () => {
             port = (httpServer.address() as AddressInfo).port;
             resolve();
         });
+        // If already listening
+        if (httpServer.listening) {
+            port = (httpServer.address() as AddressInfo).port;
+            resolve();
+        }
     });
   });
 
