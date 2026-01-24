@@ -49,7 +49,7 @@ export const InputBar = () => {
         type="text"
         value={value}
         onChange={(event) => setValue(event.target.value)}
-        placeholder={isConnected ? 'Type /task add <title> to create a task...' : 'Waiting for server connection...'}
+        placeholder={isConnected ? '/task 任务标题 | 描述（可选）' : 'Waiting for server connection...'}
         className="flex-1 bg-transparent text-slate-100 placeholder:text-slate-500 text-sm focus:outline-none px-3"
       />
       <button
