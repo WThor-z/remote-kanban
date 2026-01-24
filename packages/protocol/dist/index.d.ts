@@ -1,5 +1,6 @@
 export type MessageType = 'command' | 'log' | 'status' | 'output';
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+export * from './kanban';
 export interface Message {
     raw: string;
     content: string;

@@ -3,6 +3,8 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import { PtyManager } from '@opencode-vibe/pty-manager';
+import { KanbanStore } from './kanban';
+import type { KanbanTaskStatus } from '@opencode-vibe/protocol';
 
 export function startServer(port: number = 3000) {
   const app = express();
@@ -14,6 +16,14 @@ export function startServer(port: number = 3000) {
       origin: '*',
       methods: ['GET', 'POST']
     }
+  });
+
+  // Initialize KanbanStore (in-memory for now, KanbanManager for file persistence)
+  const kanbanStore = new KanbanStore();
+
+  // Broadcast kanban state to all clients when it changes
+  kanbanStore.subscribe((state) => {
+    io.emit('kanban:sync', state);
   });
 
   // Initialize PtyManager - intended for use in future socket events
@@ -40,9 +50,39 @@ export function startServer(port: number = 3000) {
     }
   };
 
-  io.on('connection', (socket) => {
+io.on('connection', (socket) => {
     console.log('Client connected:', socket.id);
 
+    // === Kanban Events ===
+    socket.on('kanban:request-sync', () => {
+      socket.emit('kanban:sync', kanbanStore.getState());
+    });
+
+    socket.on('kanban:create', (payload: { title: string; description?: string }) => {
+      try {
+        kanbanStore.createTask(payload.title, payload.description);
+      } catch (err) {
+        socket.emit('kanban:error', { message: (err as Error).message });
+      }
+    });
+
+    socket.on('kanban:move', (payload: { taskId: string; targetStatus: KanbanTaskStatus; targetIndex?: number }) => {
+      try {
+        kanbanStore.moveTask(payload.taskId, payload.targetStatus, payload.targetIndex);
+      } catch (err) {
+        socket.emit('kanban:error', { message: (err as Error).message });
+      }
+    });
+
+    socket.on('kanban:delete', (payload: { taskId: string }) => {
+      try {
+        kanbanStore.deleteTask(payload.taskId);
+      } catch (err) {
+        socket.emit('kanban:error', { message: (err as Error).message });
+      }
+    });
+
+    // === PTY Session ===
     if (activeSession) {
       socket.emit('output', '\r\n\x1b[33mNotice: Previous session closed.\x1b[0m\r\n');
       cleanupSession();
