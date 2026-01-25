@@ -34,7 +34,7 @@ export interface UpdateTaskRequest {
   priority?: TaskPriority;
 }
 
-// API base URL - defaults to Rust backend
+// API base URL - defaults to Rust backend REST API (port 3001)
 const getApiBaseUrl = (): string => {
   if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_RUST_API_URL) {
     return import.meta.env.VITE_RUST_API_URL;

@@ -39,7 +39,10 @@ export const useOpencode = () => {
   useEffect(() => {
     if (!socket || socketUrl !== url) {
       socket?.disconnect();
-      socket = io(url);
+      // Use WebSocket transport only to avoid CORS issues with polling
+      socket = io(url, {
+        transports: ['websocket'],
+      });
       socketUrl = url;
     }
 

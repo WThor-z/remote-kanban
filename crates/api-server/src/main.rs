@@ -1,18 +1,23 @@
 //! API Server for OpenCode Vibe Kanban
 //!
 //! This is the main entry point for the Rust backend.
+//! It provides REST API on port 3001 and Socket.IO on port 3000.
 
 mod routes;
+mod socket;
 mod state;
 
 use axum::Router;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use crate::socket::{create_socket_layer, SocketState};
 use crate::state::AppState;
+use vk_core::kanban::KanbanStore;
 
 #[tokio::main]
 async fn main() {
@@ -20,7 +25,7 @@ async fn main() {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "api_server=debug,tower_http=debug".into()),
+                .unwrap_or_else(|_| "api_server=debug,tower_http=debug,socketioxide=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -32,13 +37,26 @@ async fn main() {
 
     tracing::info!("Using data directory: {:?}", data_dir);
 
-    // Create application state
-    let state = AppState::new(data_dir)
+    // Create application state for REST API
+    let app_state = AppState::new(data_dir.clone())
         .await
         .expect("Failed to initialize application state");
 
-    // Build the router
-    let app = Router::new()
+    // Create kanban store for Socket.IO - synced with TaskStore
+    let kanban_path = data_dir.join("kanban.json");
+    let kanban_store = KanbanStore::with_task_store(kanban_path, app_state.task_store_arc())
+        .await
+        .expect("Failed to initialize kanban store");
+
+    // Create Socket.IO layer
+    let socket_state = SocketState {
+        kanban_store: Arc::new(kanban_store),
+        task_store: app_state.task_store_arc(),
+    };
+    let (socket_layer, _io) = create_socket_layer(socket_state);
+
+    // REST API server (port 3001)
+    let rest_app = Router::new()
         .merge(routes::health::router())
         .merge(routes::task::router())
         .layer(
@@ -48,12 +66,38 @@ async fn main() {
                 .allow_headers(Any),
         )
         .layer(TraceLayer::new_for_http())
-        .with_state(state);
+        .with_state(app_state);
 
-    // Start the server
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3001));
-    tracing::info!("Rust API server listening on {}", addr);
+    // Socket.IO server (port 3000)
+    // Layers are applied bottom-to-top, so CorsLayer is added last to be applied first
+    let socket_app = Router::new()
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
+        .layer(socket_layer);
 
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    // Start both servers
+    let rest_addr = SocketAddr::from(([127, 0, 0, 1], 3001));
+    let socket_addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+
+    tracing::info!("REST API listening on {}", rest_addr);
+    tracing::info!("Socket.IO listening on {}", socket_addr);
+
+    // Spawn REST server
+    let rest_listener = tokio::net::TcpListener::bind(rest_addr).await.unwrap();
+    let rest_handle = tokio::spawn(async move {
+        axum::serve(rest_listener, rest_app).await.unwrap();
+    });
+
+    // Spawn Socket.IO server
+    let socket_listener = tokio::net::TcpListener::bind(socket_addr).await.unwrap();
+    let socket_handle = tokio::spawn(async move {
+        axum::serve(socket_listener, socket_app).await.unwrap();
+    });
+
+    // Wait for both
+    tokio::try_join!(rest_handle, socket_handle).unwrap();
 }

@@ -18,4 +18,7 @@ pub enum Error {
 
     #[error("Invalid input: {0}")]
     InvalidInput(String),
+
+    #[error("Storage error: {0}")]
+    Storage(String),
 }

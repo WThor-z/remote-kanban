@@ -12,7 +12,7 @@ import type { KanbanTask } from '@opencode-vibe/protocol';
 
 function App() {
   const { isConnected, socket } = useOpencode();
-  const { board, moveTask, deleteTask } = useKanban();
+  const { board, moveTask, deleteTask, createTask: createKanbanTask } = useKanban();
   const [selectedTask, setSelectedTask] = useState<KanbanTask | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
@@ -51,16 +51,17 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Handle task creation via Rust API
+  // Handle task creation via Rust API and sync to Kanban board
   const handleCreateTask = useCallback(async (data: CreateTaskRequest): Promise<boolean> => {
     const task = await createTask(data);
     if (task) {
       console.log('[App] Task created successfully via Rust API:', task);
-      // TODO (M-1.4): Sync to Socket.IO kanban board
+      // Sync to Socket.IO kanban board - emit create event to broadcast to all clients
+      createKanbanTask(task.title, task.description || undefined);
       return true;
     }
     return false;
-  }, [createTask]);
+  }, [createTask, createKanbanTask]);
 
   const handleCloseCreateModal = useCallback(() => {
     setIsCreateModalOpen(false);
