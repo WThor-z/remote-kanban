@@ -130,9 +130,19 @@ pub async fn on_connect(socket: SocketRef, State(_state): State<SocketState>) {
 
 async fn handle_request_sync(socket: SocketRef, state: SocketState) {
     info!("Client {} requested sync", socket.id);
-    let board_state = state.kanban_store.get_state().await;
-    if let Err(e) = socket.emit("kanban:sync", &board_state) {
-        warn!("Failed to emit sync: {}", e);
+    // Sync from TaskStore first to pick up any new tasks created via REST API
+    match state.kanban_store.get_state_synced().await {
+        Ok(board_state) => {
+            if let Err(e) = socket.emit("kanban:sync", &board_state) {
+                warn!("Failed to emit sync: {}", e);
+            }
+        }
+        Err(e) => {
+            warn!("Failed to sync state: {}", e);
+            // Fall back to unsync'd state
+            let board_state = state.kanban_store.get_state().await;
+            let _ = socket.emit("kanban:sync", &board_state);
+        }
     }
 }
 

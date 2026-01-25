@@ -92,9 +92,58 @@ impl KanbanStore {
         Ok(store)
     }
 
+    /// Sync new tasks from TaskStore that aren't in KanbanStore yet
+    pub async fn sync_from_task_store(&self) -> Result<bool> {
+        let Some(task_store) = &self.task_store else {
+            return Ok(false);
+        };
+
+        let tasks = task_store.list().await?;
+        let mut added = false;
+
+        {
+            let mut state = self.state.write().await;
+            for task in tasks {
+                let task_id = task.id.to_string();
+                if !state.tasks.contains_key(&task_id) {
+                    // Convert Task to KanbanTask
+                    let kanban_status = match task.status {
+                        TaskStatus::Todo => KanbanTaskStatus::Todo,
+                        TaskStatus::InProgress => KanbanTaskStatus::Doing,
+                        TaskStatus::InReview => KanbanTaskStatus::Doing,
+                        TaskStatus::Done => KanbanTaskStatus::Done,
+                    };
+
+                    let mut kanban_task = KanbanTask::new(&task_id, &task.title);
+                    kanban_task.status = kanban_status;
+                    if let Some(desc) = &task.description {
+                        kanban_task = kanban_task.with_description(desc);
+                    }
+                    kanban_task.created_at = task.created_at.timestamp_millis();
+                    kanban_task.updated_at = Some(task.updated_at.timestamp_millis());
+
+                    state.add_task(kanban_task);
+                    added = true;
+                }
+            }
+        }
+
+        if added {
+            self.persist().await?;
+        }
+
+        Ok(added)
+    }
+
     /// Get the current board state
     pub async fn get_state(&self) -> KanbanBoardState {
         self.state.read().await.clone()
+    }
+
+    /// Get the current board state after syncing from TaskStore
+    pub async fn get_state_synced(&self) -> Result<KanbanBoardState> {
+        self.sync_from_task_store().await?;
+        Ok(self.state.read().await.clone())
     }
 
     /// Create a new task
