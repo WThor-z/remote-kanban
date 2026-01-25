@@ -7,6 +7,7 @@ mod state;
 
 use axum::Router;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -24,8 +25,17 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    // Determine data directory
+    let data_dir = std::env::var("VK_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(".vk-data"));
+
+    tracing::info!("Using data directory: {:?}", data_dir);
+
     // Create application state
-    let state = AppState::new();
+    let state = AppState::new(data_dir)
+        .await
+        .expect("Failed to initialize application state");
 
     // Build the router
     let app = Router::new()
