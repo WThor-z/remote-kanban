@@ -5,6 +5,11 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Rust
+target/
+Cargo.lock
+*.rs.bak
+
 # IDE
 .idea/
 .vscode/
@@ -38,7 +43,8 @@ coverage/
 .cursorrules
 AGENT.md
 
-# 项目计划文档
+# 项目计划文档 (本地专用)
+docs/plans/
 *_Plan.md
 *_plan.md
 
