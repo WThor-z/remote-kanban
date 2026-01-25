@@ -29,3 +29,22 @@ coverage/
 
 # Vitest
 .vitest/
+
+# ============================================
+# 本地开发文件 (禁止提交到远程)
+# ============================================
+
+# AI/开发配置
+.cursorrules
+AGENT.md
+
+# 项目计划文档
+*_Plan.md
+*_plan.md
+
+# OpenCode 运行时目录
+.opencode/
+packages/*/.opencode/
+
+# Windows 临时文件
+nul

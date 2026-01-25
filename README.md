@@ -155,21 +155,6 @@ cd packages/client && pnpm test
 cd packages/server && pnpm test
 ```
 
-### Code Style
-
-- TypeScript 严格模式
-- 禁止使用 `any` 类型
-- 组件命名使用 PascalCase
-- 仅使用 TailwindCSS
-
-## Contributing
-
-1. 基于 `dev` 分支创建功能分支 (`feat/*` 或 `fix/*`)
-2. 编写测试用例
-3. 实现功能
-4. 确保所有测试通过
-5. 提交 PR 到 `dev` 分支
-
 ## License
 
 MIT
