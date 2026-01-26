@@ -4,6 +4,7 @@ members = [
     "core",
     "api-server",
     "git-worktree",
+    "agent-runner",
 ]
 
 [workspace.package]

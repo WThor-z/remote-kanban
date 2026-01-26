@@ -8,4 +8,4 @@ mod error;
 mod worktree;
 
 pub use error::{WorktreeError, Result};
-pub use worktree::{Worktree, WorktreeManager, WorktreeStatus};
+pub use worktree::{Worktree, WorktreeConfig, WorktreeManager, WorktreeStatus};
