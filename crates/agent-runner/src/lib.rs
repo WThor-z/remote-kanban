@@ -11,6 +11,6 @@ mod session;
 
 pub use error::{ExecutorError, Result};
 pub use event::{AgentEvent, ExecutionEvent, ExecutionStatus};
-pub use executor::{TaskExecutor, ExecutorConfig};
+pub use executor::{ExecuteRequest, ExecutorConfig, TaskExecutor};
 pub use process::AgentProcess;
 pub use session::{ExecutionSession, SessionState};

@@ -60,6 +60,7 @@ async fn main() {
     let rest_app = Router::new()
         .merge(routes::health::router())
         .merge(routes::task::router())
+        .merge(routes::executor::router())
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
