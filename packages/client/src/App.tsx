@@ -3,12 +3,13 @@ import { useOpencode } from './hooks/useOpencode';
 import { useKanban } from './hooks/useKanban';
 import { useTaskSession } from './hooks/useTaskSession';
 import { useTaskApi, type CreateTaskRequest } from './hooks/useTaskApi';
+import { useTaskExecutor } from './hooks/useTaskExecutor';
 import { Bot, Plus } from 'lucide-react';
 import { InputBar } from './components/InputBar';
 import { KanbanBoard } from './components/kanban/KanbanBoard';
 import { AgentPanel } from './components/agent';
 import { TaskDetailPanel, CreateTaskModal } from './components/task';
-import type { KanbanTask } from '@opencode-vibe/protocol';
+import type { KanbanTask, AgentType } from '@opencode-vibe/protocol';
 
 function App() {
   const { isConnected, socket } = useOpencode();
@@ -23,6 +24,15 @@ function App() {
     createTask,
     clearError: clearTaskApiError,
   } = useTaskApi();
+
+  // Task executor hook for isolated worktree execution
+  const {
+    currentSession,
+    startExecution,
+    stopExecution: stopIsolatedExecution,
+    getExecutionStatus,
+    cleanupWorktree,
+  } = useTaskExecutor();
 
   const {
     history,
@@ -73,9 +83,11 @@ function App() {
     .filter(task => task.status === 'doing')
     .map(task => task.id);
 
-  const handleTaskClick = (task: KanbanTask) => {
+  const handleTaskClick = async (task: KanbanTask) => {
     setSelectedTask(task);
     selectTask(task.id);
+    // Fetch execution status for the selected task
+    await getExecutionStatus(task.id);
   };
 
   const handleCloseDetail = () => {
@@ -83,12 +95,35 @@ function App() {
     selectTask(null);
   };
 
-  const handleExecuteTask = (taskId: string) => {
+  const handleExecuteTask = async (taskId: string) => {
+    const task = board.tasks[taskId];
+    if (task) {
+      // Start execution in isolated worktree via REST API
+      const agentType = (task as unknown as { agentType?: string }).agentType || 'opencode';
+      const baseBranch = (task as unknown as { baseBranch?: string }).baseBranch || 'main';
+      await startExecution(taskId, {
+        agentType: agentType as AgentType,
+        baseBranch,
+      });
+    }
+    // Also trigger Socket.IO for real-time updates
     executeTask(taskId);
   };
 
-  const handleStopTask = (taskId: string) => {
+  const handleStopTask = async (taskId: string) => {
+    // Stop via REST API
+    await stopIsolatedExecution(taskId);
+    // Also stop via Socket.IO
     stopTask(taskId);
+  };
+
+  const handleCleanupWorktree = async (taskId: string) => {
+    const success = await cleanupWorktree(taskId);
+    if (success) {
+      console.log('[App] Worktree cleaned up for task:', taskId);
+      // Refresh execution status
+      await getExecutionStatus(taskId);
+    }
   };
 
   const handleSendMessage = (taskId: string, content: string) => {
@@ -161,10 +196,17 @@ function App() {
           status={status}
           isLoading={isLoading}
           error={error}
+          executionInfo={currentSession && currentSession.taskId === selectedTask.id ? {
+            sessionId: currentSession.sessionId,
+            worktreePath: currentSession.worktreePath,
+            branch: currentSession.branch,
+            state: currentSession.state,
+          } : null}
           onClose={handleCloseDetail}
           onExecute={handleExecuteTask}
           onStop={handleStopTask}
           onSendMessage={handleSendMessage}
+          onCleanupWorktree={handleCleanupWorktree}
         />
       )}
 
