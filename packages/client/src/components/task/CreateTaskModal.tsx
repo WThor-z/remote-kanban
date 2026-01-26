@@ -6,8 +6,9 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { X, Plus, Play, Loader2, AlertCircle, ChevronDown } from 'lucide-react';
+import { X, Plus, Play, Loader2, AlertCircle, ChevronDown, GitBranch, Bot } from 'lucide-react';
 import type { TaskPriority, CreateTaskRequest } from '../../hooks/useTaskApi';
+import type { AgentType } from '@opencode-vibe/protocol';
 
 interface CreateTaskModalProps {
   isOpen: boolean;
@@ -24,6 +25,13 @@ const priorityOptions: { value: TaskPriority; label: string; color: string }[] =
   { value: 'high', label: 'High', color: 'text-rose-400' },
 ];
 
+const agentOptions: { value: AgentType; label: string; description: string }[] = [
+  { value: 'opencode', label: 'OpenCode', description: 'SST OpenCode AI Agent' },
+  { value: 'claude-code', label: 'Claude Code', description: 'Anthropic Claude Code' },
+  { value: 'gemini-cli', label: 'Gemini CLI', description: 'Google Gemini CLI' },
+  { value: 'codex', label: 'Codex', description: 'OpenAI Codex' },
+];
+
 export function CreateTaskModal({
   isOpen,
   onClose,
@@ -36,6 +44,9 @@ export function CreateTaskModal({
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<TaskPriority>('medium');
   const [isPriorityOpen, setIsPriorityOpen] = useState(false);
+  const [agentType, setAgentType] = useState<AgentType>('opencode');
+  const [isAgentOpen, setIsAgentOpen] = useState(false);
+  const [baseBranch, setBaseBranch] = useState('main');
   const [localError, setLocalError] = useState<string | null>(null);
 
   // Reset form when modal opens
@@ -44,6 +55,8 @@ export function CreateTaskModal({
       setTitle('');
       setDescription('');
       setPriority('medium');
+      setAgentType('opencode');
+      setBaseBranch('main');
       setLocalError(null);
     }
   }, [isOpen]);
@@ -75,6 +88,8 @@ export function CreateTaskModal({
       title: title.trim(),
       description: description.trim() || undefined,
       priority,
+      agentType,
+      baseBranch: baseBranch.trim() || 'main',
     };
 
     const success = await onCreate(data);
@@ -90,6 +105,8 @@ export function CreateTaskModal({
       title: title.trim(),
       description: description.trim() || undefined,
       priority,
+      agentType,
+      baseBranch: baseBranch.trim() || 'main',
     };
 
     const success = await onCreateAndStart(data);
@@ -209,6 +226,62 @@ export function CreateTaskModal({
                 </div>
               )}
             </div>
+          </div>
+
+          {/* Agent Type */}
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-1.5">
+              <Bot size={14} className="inline mr-1.5" />
+              Agent
+            </label>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsAgentOpen(!isAgentOpen)}
+                className="w-full flex items-center justify-between bg-slate-700 border border-slate-600 rounded-lg px-3 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                disabled={isLoading}
+              >
+                <span className="text-indigo-400">{agentOptions.find(a => a.value === agentType)?.label}</span>
+                <ChevronDown size={16} className={`text-slate-400 transition-transform ${isAgentOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {isAgentOpen && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-slate-700 border border-slate-600 rounded-lg shadow-xl z-10 overflow-hidden">
+                  {agentOptions.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => {
+                        setAgentType(option.value);
+                        setIsAgentOpen(false);
+                      }}
+                      className={`w-full px-3 py-2.5 text-left hover:bg-slate-600 transition-colors ${
+                        agentType === option.value ? 'bg-slate-600' : ''
+                      }`}
+                    >
+                      <div className="text-indigo-400">{option.label}</div>
+                      <div className="text-xs text-slate-400">{option.description}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Base Branch */}
+          <div>
+            <label htmlFor="task-branch" className="block text-sm font-medium text-slate-300 mb-1.5">
+              <GitBranch size={14} className="inline mr-1.5" />
+              Base Branch
+            </label>
+            <input
+              id="task-branch"
+              type="text"
+              value={baseBranch}
+              onChange={(e) => setBaseBranch(e.target.value)}
+              placeholder="main"
+              className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2.5 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              disabled={isLoading}
+            />
           </div>
         </div>
 

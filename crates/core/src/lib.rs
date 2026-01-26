@@ -6,6 +6,7 @@
 //! - Project management
 //! - Agent configuration
 
+pub mod agent;
 pub mod error;
 pub mod kanban;
 pub mod task;

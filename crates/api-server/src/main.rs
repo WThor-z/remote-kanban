@@ -49,10 +49,11 @@ async fn main() {
         .expect("Failed to initialize kanban store");
 
     // Create Socket.IO layer
-    let socket_state = SocketState {
-        kanban_store: Arc::new(kanban_store),
-        task_store: app_state.task_store_arc(),
-    };
+    let socket_state = SocketState::new(
+        Arc::new(kanban_store),
+        app_state.task_store_arc(),
+        data_dir.clone(),
+    );
     let (socket_layer, _io) = create_socket_layer(socket_state);
 
     // REST API server (port 3001)
@@ -79,9 +80,9 @@ async fn main() {
         )
         .layer(socket_layer);
 
-    // Start both servers
-    let rest_addr = SocketAddr::from(([127, 0, 0, 1], 3001));
-    let socket_addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    // Start both servers - bind to 0.0.0.0 for localhost/127.0.0.1 compatibility
+    let rest_addr = SocketAddr::from(([0, 0, 0, 0], 8081));
+    let socket_addr = SocketAddr::from(([0, 0, 0, 0], 8080));
 
     tracing::info!("REST API listening on {}", rest_addr);
     tracing::info!("Socket.IO listening on {}", socket_addr);

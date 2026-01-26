@@ -6,6 +6,7 @@
  */
 
 import { useState, useCallback } from 'react';
+import type { AgentType } from '@opencode-vibe/protocol';
 
 // Types matching the Rust API
 export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done';
@@ -17,14 +18,18 @@ export interface Task {
   description: string | null;
   status: TaskStatus;
   priority: TaskPriority;
-  created_at: string;
-  updated_at: string;
+  agentType: AgentType | null;
+  baseBranch: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface CreateTaskRequest {
   title: string;
   description?: string;
   priority?: TaskPriority;
+  agentType?: AgentType;
+  baseBranch?: string;
 }
 
 export interface UpdateTaskRequest {

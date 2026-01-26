@@ -20,12 +20,17 @@ use crate::state::AppState;
 // ============================================================================
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateTaskRequest {
     pub title: String,
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
     pub priority: Option<TaskPriority>,
+    #[serde(default)]
+    pub agent_type: Option<String>,
+    #[serde(default)]
+    pub base_branch: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,12 +46,15 @@ pub struct UpdateTaskRequest {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TaskResponse {
     pub id: Uuid,
     pub title: String,
     pub description: Option<String>,
     pub status: TaskStatus,
     pub priority: TaskPriority,
+    pub agent_type: Option<String>,
+    pub base_branch: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -59,6 +67,8 @@ impl From<Task> for TaskResponse {
             description: task.description,
             status: task.status,
             priority: task.priority,
+            agent_type: task.agent_type,
+            base_branch: task.base_branch,
             created_at: task.created_at.to_rfc3339(),
             updated_at: task.updated_at.to_rfc3339(),
         }
@@ -113,6 +123,14 @@ async fn create_task(
 
     if let Some(priority) = req.priority {
         task = task.with_priority(priority);
+    }
+
+    if let Some(agent_type) = req.agent_type {
+        task = task.with_agent_type(agent_type);
+    }
+
+    if let Some(base_branch) = req.base_branch {
+        task = task.with_base_branch(base_branch);
     }
 
     let created = state.task_store().create(task).await.map_err(|e| {

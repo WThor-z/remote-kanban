@@ -44,3 +44,18 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Socket.IO
 socketioxide = { version = "0.14", features = ["state"] }
+
+# HTTP Client
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Random
+rand = "0.8"
+
+# Base64
+base64 = "0.22"
+
+# Futures
+futures = "0.3"
+
+# URL encoding
+urlencoding = "2.1"

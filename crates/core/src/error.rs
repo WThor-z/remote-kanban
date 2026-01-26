@@ -21,4 +21,7 @@ pub enum Error {
 
     #[error("Storage error: {0}")]
     Storage(String),
+
+    #[error("Agent error: {0}")]
+    Agent(String),
 }

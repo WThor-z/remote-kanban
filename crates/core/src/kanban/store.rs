@@ -146,6 +146,12 @@ impl KanbanStore {
         Ok(self.state.read().await.clone())
     }
 
+    /// Get a task by ID
+    pub async fn get_task(&self, task_id: &str) -> Option<KanbanTask> {
+        let state = self.state.read().await;
+        state.tasks.get(task_id).cloned()
+    }
+
     /// Create a new task
     pub async fn create_task(&self, title: &str, description: Option<&str>) -> Result<KanbanTask> {
         let task_id = format!("task-{}-{}", 

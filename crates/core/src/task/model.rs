@@ -43,6 +43,8 @@ pub struct Task {
     pub description: Option<String>,
     pub status: TaskStatus,
     pub priority: TaskPriority,
+    pub agent_type: Option<String>,
+    pub base_branch: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -57,6 +59,8 @@ impl Task {
             description: None,
             status: TaskStatus::default(),
             priority: TaskPriority::default(),
+            agent_type: Some("opencode".to_string()),
+            base_branch: Some("main".to_string()),
             created_at: now,
             updated_at: now,
         }
@@ -71,6 +75,18 @@ impl Task {
     /// Set the priority
     pub fn with_priority(mut self, priority: TaskPriority) -> Self {
         self.priority = priority;
+        self
+    }
+
+    /// Set the agent type
+    pub fn with_agent_type(mut self, agent_type: impl Into<String>) -> Self {
+        self.agent_type = Some(agent_type.into());
+        self
+    }
+
+    /// Set the base branch
+    pub fn with_base_branch(mut self, base_branch: impl Into<String>) -> Self {
+        self.base_branch = Some(base_branch.into());
         self
     }
 }
