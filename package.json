@@ -1,17 +1,29 @@
 {
   "name": "remote",
   "version": "1.0.0",
-  "description": "",
+  "description": "OpenCode Vibe Kanban - AI Agent orchestration platform",
   "main": "index.js",
   "private": true,
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
-    "test": "npm test --workspaces"
+    "dev": "concurrently -n ts,rust,client -c blue,yellow,green \"pnpm run dev:ts\" \"pnpm run dev:rust\" \"pnpm run dev:client\"",
+    "dev:ts": "pnpm --filter @remote/server run dev",
+    "dev:rust": "cd crates && cargo watch -x 'run -p api-server'",
+    "dev:client": "pnpm --filter @remote/client run dev",
+    "build": "pnpm run build:rust && pnpm run build:ts",
+    "build:ts": "pnpm -r run build",
+    "build:rust": "cd crates && cargo build --release",
+    "test": "pnpm run test:ts && pnpm run test:rust",
+    "test:ts": "pnpm -r run test",
+    "test:rust": "cd crates && cargo test"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
-  "type": "commonjs"
+  "license": "MIT",
+  "type": "commonjs",
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
 }

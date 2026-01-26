@@ -1,18 +1,28 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useOpencode } from './hooks/useOpencode';
 import { useKanban } from './hooks/useKanban';
 import { useTaskSession } from './hooks/useTaskSession';
-import { Bot } from 'lucide-react';
+import { useTaskApi, type CreateTaskRequest } from './hooks/useTaskApi';
+import { Bot, Plus } from 'lucide-react';
 import { InputBar } from './components/InputBar';
 import { KanbanBoard } from './components/kanban/KanbanBoard';
 import { AgentPanel } from './components/agent';
-import { TaskDetailPanel } from './components/task';
+import { TaskDetailPanel, CreateTaskModal } from './components/task';
 import type { KanbanTask } from '@opencode-vibe/protocol';
 
 function App() {
   const { isConnected, socket } = useOpencode();
-  const { board, moveTask, deleteTask } = useKanban();
+  const { board, moveTask, deleteTask, requestSync } = useKanban();
   const [selectedTask, setSelectedTask] = useState<KanbanTask | null>(null);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+
+  // Rust API hook for task management
+  const {
+    isLoading: isTaskApiLoading,
+    error: taskApiError,
+    createTask,
+    clearError: clearTaskApiError,
+  } = useTaskApi();
 
   const {
     history,
@@ -24,6 +34,39 @@ function App() {
     stopTask,
     sendMessage,
   } = useTaskSession({ socket, isConnected });
+
+  // Keyboard shortcut "c" to open create modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if user is typing in an input field
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return;
+      }
+      if (e.key === 'c' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        setIsCreateModalOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Handle task creation via Rust API and sync to Kanban board
+  const handleCreateTask = useCallback(async (data: CreateTaskRequest): Promise<boolean> => {
+    const task = await createTask(data);
+    if (task) {
+      console.log('[App] Task created successfully via Rust API:', task);
+      // Request sync to refresh kanban board with new task from REST API
+      requestSync();
+      return true;
+    }
+    return false;
+  }, [createTask, requestSync]);
+
+  const handleCloseCreateModal = useCallback(() => {
+    setIsCreateModalOpen(false);
+    clearTaskApiError();
+  }, [clearTaskApiError]);
 
   // 获取正在执行的任务 ID 列表
   const executingTaskIds = Object.values(board.tasks)
@@ -69,6 +112,17 @@ function App() {
           AI-Powered Development with Visual Task Management
         </p>
 
+        {/* Create Task Button */}
+        <button
+          type="button"
+          onClick={() => setIsCreateModalOpen(true)}
+          className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium transition-colors shadow-lg shadow-indigo-500/20"
+          title="Create new task (Press 'c')"
+        >
+          <Plus size={18} />
+          New Task
+        </button>
+
         <div className={`inline-flex items-center px-4 py-2 rounded-full text-sm font-medium ${
           isConnected 
             ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
@@ -113,6 +167,15 @@ function App() {
           onSendMessage={handleSendMessage}
         />
       )}
+
+      {/* Create Task Modal */}
+      <CreateTaskModal
+        isOpen={isCreateModalOpen}
+        onClose={handleCloseCreateModal}
+        onCreate={handleCreateTask}
+        isLoading={isTaskApiLoading}
+        error={taskApiError}
+      />
     </div>
   )
 }

@@ -1,0 +1,61 @@
+[workspace]
+resolver = "2"
+members = [
+    "core",
+    "api-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["OpenCode Vibe Kanban Contributors"]
+license = "MIT"
+repository = "https://github.com/WThor-z/remote-kanban"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.43", features = ["full"] }
+
+# Web framework
+axum = { version = "0.8", features = ["ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Async utilities
+async-trait = "0.1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# UUID
+uuid = { version = "1.11", features = ["v4", "serde"] }
+
+# Date/Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Socket.IO
+socketioxide = { version = "0.14", features = ["state"] }
+
+# HTTP Client
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Random
+rand = "0.8"
+
+# Base64
+base64 = "0.22"
+
+# Futures
+futures = "0.3"
+
+# URL encoding
+urlencoding = "2.1"

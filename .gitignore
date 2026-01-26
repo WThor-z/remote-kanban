@@ -5,6 +5,11 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Rust
+target/
+Cargo.lock
+*.rs.bak
+
 # IDE
 .idea/
 .vscode/
@@ -38,13 +43,17 @@ coverage/
 .cursorrules
 AGENT.md
 
-# 项目计划文档
+# 项目计划文档 (本地专用)
+docs/plans/
 *_Plan.md
 *_plan.md
 
 # OpenCode 运行时目录
 .opencode/
 packages/*/.opencode/
+
+# Vibe Kanban 数据目录
+.vk-data/
 
 # Windows 临时文件
 nul

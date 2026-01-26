@@ -39,7 +39,10 @@ export const useKanban = () => {
   useEffect(() => {
     if (!kanbanSocket || kanbanSocketUrl !== url) {
       kanbanSocket?.disconnect();
-      kanbanSocket = io(url);
+      // Use WebSocket transport only to avoid CORS issues with polling
+      kanbanSocket = io(url, {
+        transports: ['websocket'],
+      });
       kanbanSocketUrl = url;
     }
 
@@ -76,11 +79,17 @@ export const useKanban = () => {
     kanbanSocket?.emit('kanban:delete', { taskId });
   }, []);
 
+  // Request sync from server (useful after external changes like REST API)
+  const requestSync = useCallback(() => {
+    kanbanSocket?.emit('kanban:request-sync');
+  }, []);
+
   return {
     board,
     isLoading,
     createTask,
     moveTask,
     deleteTask,
+    requestSync,
   };
 };
