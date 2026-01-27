@@ -1,6 +1,13 @@
 import { useState, useRef, useEffect } from 'react';
-import { X, Play, Square, Send, Loader2, CheckCircle, XCircle, Clock } from 'lucide-react';
+import { X, Play, Square, Send, Loader2, CheckCircle, XCircle, Clock, GitBranch, Trash2 } from 'lucide-react';
 import type { KanbanTask, TaskSessionHistory, AgentSessionStatus, ChatMessage } from '@opencode-vibe/protocol';
+
+interface ExecutionInfo {
+  sessionId: string;
+  worktreePath: string | null;
+  branch: string | null;
+  state: string;
+}
 
 interface TaskDetailPanelProps {
   task: KanbanTask;
@@ -8,10 +15,12 @@ interface TaskDetailPanelProps {
   status: AgentSessionStatus | null;
   isLoading: boolean;
   error: string | null;
+  executionInfo?: ExecutionInfo | null;
   onClose: () => void;
   onExecute: (taskId: string) => void;
   onStop: (taskId: string) => void;
   onSendMessage: (taskId: string, content: string) => void;
+  onCleanupWorktree?: (taskId: string) => void;
 }
 
 const statusConfig: Record<AgentSessionStatus, { icon: React.ReactNode; label: string; color: string }> = {
@@ -30,10 +39,12 @@ export function TaskDetailPanel({
   status,
   isLoading,
   error,
+  executionInfo,
   onClose,
   onExecute,
   onStop,
   onSendMessage,
+  onCleanupWorktree,
 }: TaskDetailPanelProps) {
   const [inputValue, setInputValue] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -84,6 +95,45 @@ export function TaskDetailPanel({
             <div className="bg-slate-700/50 rounded-lg p-3 text-sm text-slate-300">
               <div className="text-xs text-slate-500 mb-1">任务描述</div>
               {task.description}
+            </div>
+          )}
+
+          {/* Worktree Info */}
+          {executionInfo && executionInfo.worktreePath && (
+            <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-lg p-3 text-sm">
+              <div className="flex items-center gap-2 text-indigo-400 mb-2">
+                <GitBranch size={14} />
+                <span className="font-medium">隔离执行环境</span>
+              </div>
+              <div className="space-y-1 text-slate-300">
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-500">分支:</span>
+                  <code className="bg-slate-700 px-1.5 py-0.5 rounded text-xs">{executionInfo.branch}</code>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-500">状态:</span>
+                  <span className={executionInfo.state.includes('running') ? 'text-indigo-400' : 
+                    executionInfo.state.includes('completed') ? 'text-emerald-400' : 
+                    executionInfo.state.includes('failed') ? 'text-rose-400' : 'text-slate-400'}>
+                    {executionInfo.state}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-slate-500">
+                  <span>路径:</span>
+                  <code className="bg-slate-700 px-1.5 py-0.5 rounded">{executionInfo.worktreePath}</code>
+                </div>
+              </div>
+              {/* Cleanup button for completed/failed sessions */}
+              {onCleanupWorktree && (executionInfo.state.includes('completed') || executionInfo.state.includes('failed') || executionInfo.state.includes('cancelled')) && (
+                <button
+                  type="button"
+                  onClick={() => onCleanupWorktree(task.id)}
+                  className="mt-2 flex items-center gap-1.5 text-xs text-rose-400 hover:text-rose-300 transition-colors"
+                >
+                  <Trash2 size={12} />
+                  清理 Worktree
+                </button>
+              )}
             </div>
           )}
 

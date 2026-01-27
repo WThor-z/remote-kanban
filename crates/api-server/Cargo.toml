@@ -6,6 +6,8 @@ license.workspace = true
 
 [dependencies]
 vk-core = { path = "../core" }
+agent-runner = { path = "../agent-runner" }
+git-worktree = { path = "../git-worktree" }
 
 tokio.workspace = true
 axum.workspace = true
@@ -17,3 +19,4 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 socketioxide.workspace = true
+chrono.workspace = true

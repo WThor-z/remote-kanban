@@ -1,0 +1,37 @@
+[package]
+name = "agent-runner"
+version = "0.1.0"
+edition = "2021"
+description = "Task executor for running agents in isolated worktrees"
+license = "MIT"
+
+[dependencies]
+# Workspace dependencies
+git-worktree = { path = "../git-worktree" }
+vk-core = { path = "../core" }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+tokio-stream = "0.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Logging
+tracing = "0.1"
+
+# Utilities
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Async channels
+async-channel = "2.0"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.0"
