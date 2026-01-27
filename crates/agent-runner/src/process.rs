@@ -35,8 +35,20 @@ impl AgentType {
     /// Get the command to run this agent
     pub fn command(&self) -> &'static str {
         match self {
-            Self::OpenCode => "opencode",
-            Self::ClaudeCode => "claude",
+            Self::OpenCode => {
+                if cfg!(target_os = "windows") {
+                    "opencode.cmd"
+                } else {
+                    "opencode"
+                }
+            },
+            Self::ClaudeCode => {
+                if cfg!(target_os = "windows") {
+                    "claude.cmd"
+                } else {
+                    "claude"
+                }
+            },
             Self::GeminiCli => "gemini",
             Self::Codex => "codex",
         }
