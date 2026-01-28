@@ -26,6 +26,21 @@ fastify.post('/execute', async (request, reply) => {
             reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
         };
         sendEvent({ type: 'status', status: 'starting' });
+        // Mock execution for testing
+        if (prompt.includes('mock-test')) {
+            sendEvent({ type: 'log', content: 'Mocking execution...' });
+            await new Promise(resolve => setTimeout(resolve, 500));
+            sendEvent({ type: 'log', content: 'Step 1: Analyzing request' });
+            await new Promise(resolve => setTimeout(resolve, 500));
+            sendEvent({ type: 'log', content: 'Thinking: I should generate a response.' });
+            await new Promise(resolve => setTimeout(resolve, 500));
+            sendEvent({ type: 'log', content: 'Step 2: Performing action' });
+            await new Promise(resolve => setTimeout(resolve, 500));
+            sendEvent({ type: 'log', content: 'Step 3: Verifying result' });
+            sendEvent({ type: 'status', status: 'completed' });
+            reply.raw.end();
+            return;
+        }
         // Determine command based on agentType
         // For now defaulting to 'opencode'
         // On Windows, execa handles .cmd extension automatically usually, but we can be explicit
@@ -39,6 +54,13 @@ fastify.post('/execute', async (request, reply) => {
                 ...env,
                 // Ensure no colors for easier parsing
                 NO_COLOR: '1',
+                // Clear proxy settings to avoid Privoxy errors
+                HTTP_PROXY: '',
+                HTTPS_PROXY: '',
+                http_proxy: '',
+                https_proxy: '',
+                ALL_PROXY: '',
+                all_proxy: '',
             },
             all: true,
             reject: false, // Don't throw on non-zero exit

@@ -33,7 +33,11 @@ pub struct WorkerClient {
 impl WorkerClient {
     pub fn new(url: String) -> Self {
         Self {
-            client: Client::new(),
+            // Disable proxy for internal worker communication
+            client: Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             url,
         }
     }
@@ -70,6 +74,7 @@ impl WorkerClient {
         // Handle stream
         let mut stream = res.bytes_stream();
         let mut buffer = String::new();
+        let mut final_result = Ok(());
         
         let mut parser = create_parser(agent_type);
 
@@ -102,14 +107,14 @@ impl WorkerClient {
                                             message: err_msg.to_string(), 
                                             recoverable: false 
                                         }).await;
-                                        return Err(ExecutorError::execution_failed(format!("Task failed: {}", err_msg)));
+                                        final_result = Err(ExecutorError::execution_failed(format!("Task failed: {}", err_msg)));
                                     }
                                     if status == "completed" {
                                         let _ = event_tx.send(AgentEvent::Completed { 
                                             success: true, 
                                             summary: None 
                                         }).await;
-                                        return Ok(());
+                                        final_result = Ok(());
                                     }
                                 }
                             }
@@ -120,7 +125,7 @@ impl WorkerClient {
             }
         }
 
-        Ok(())
+        final_result
     }
 
     pub async fn stop(&self, task_id: String) -> Result<()> {

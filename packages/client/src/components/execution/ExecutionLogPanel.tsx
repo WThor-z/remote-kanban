@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { useExecutionEvents } from '../../hooks/useExecutionEvents';
-import { ExecutionEvent, AgentEvent } from '@opencode-vibe/protocol';
+import type { ExecutionEvent, AgentEvent } from '@opencode-vibe/protocol';
 import { Terminal, Cpu, FileCode, AlertCircle, CheckCircle, MessageSquare } from 'lucide-react';
 
 interface Props {

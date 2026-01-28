@@ -106,8 +106,7 @@ function App() {
         baseBranch,
       });
     }
-    // Also trigger Socket.IO for real-time updates
-    executeTask(taskId);
+    // Socket.IO updates will come automatically via task:execution_event
   };
 
   const handleStopTask = async (taskId: string) => {

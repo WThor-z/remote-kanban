@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useOpencode } from './useOpencode';
-import { ExecutionEvent } from '@opencode-vibe/protocol';
+import type { ExecutionEvent } from '@opencode-vibe/protocol';
 
 export const useExecutionEvents = (taskId: string) => {
   const { socket } = useOpencode();
