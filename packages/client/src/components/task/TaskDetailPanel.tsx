@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
-import { X, Play, Square, Send, Loader2, CheckCircle, XCircle, Clock, GitBranch, Trash2 } from 'lucide-react';
+import { X, Play, Square, Send, Loader2, CheckCircle, XCircle, Clock, GitBranch, Trash2, MessageSquare, Terminal } from 'lucide-react';
 import type { KanbanTask, TaskSessionHistory, AgentSessionStatus, ChatMessage } from '@opencode-vibe/protocol';
+import { ExecutionLogPanel } from '../execution/ExecutionLogPanel';
 
 interface ExecutionInfo {
   sessionId: string;
@@ -47,14 +48,24 @@ export function TaskDetailPanel({
   onCleanupWorktree,
 }: TaskDetailPanelProps) {
   const [inputValue, setInputValue] = useState('');
+  const [activeTab, setActiveTab] = useState<'chat' | 'logs'>('chat');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const currentStatus = status || 'idle';
   const statusInfo = statusConfig[currentStatus];
 
+  // Auto-switch to logs when execution starts
+  useEffect(() => {
+    if (status === 'starting' || status === 'running') {
+      setActiveTab('logs');
+    }
+  }, [status]);
+
   // 自动滚动到底部
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [history?.messages]);
+    if (activeTab === 'chat') {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [history?.messages, activeTab]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -68,9 +79,9 @@ export function TaskDetailPanel({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-slate-800 rounded-xl shadow-2xl border border-slate-700 w-full max-w-2xl max-h-[80vh] flex flex-col">
+      <div className="bg-slate-800 rounded-xl shadow-2xl border border-slate-700 w-full max-w-2xl h-[80vh] flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-slate-700">
+        <div className="flex items-center justify-between p-4 border-b border-slate-700 bg-slate-800 z-20">
           <div className="flex-1 min-w-0">
             <h2 className="text-lg font-semibold text-white truncate">{task.title}</h2>
             <div className={`flex items-center gap-1.5 text-sm ${statusInfo.color}`}>
@@ -88,86 +99,120 @@ export function TaskDetailPanel({
           </button>
         </div>
 
-        {/* Messages Area */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {/* Task Description */}
-          {task.description && (
-            <div className="bg-slate-700/50 rounded-lg p-3 text-sm text-slate-300">
-              <div className="text-xs text-slate-500 mb-1">任务描述</div>
-              {task.description}
-            </div>
-          )}
+        {/* Tabs */}
+        <div className="flex border-b border-slate-700 bg-slate-900/30">
+          <button
+            onClick={() => setActiveTab('chat')}
+            className={`flex-1 px-4 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${
+              activeTab === 'chat'
+                ? 'text-indigo-400 border-b-2 border-indigo-400 bg-slate-800/50'
+                : 'text-slate-400 hover:text-slate-300 hover:bg-slate-800/30'
+            }`}
+          >
+            <MessageSquare size={16} />
+            Chat
+          </button>
+          <button
+            onClick={() => setActiveTab('logs')}
+            className={`flex-1 px-4 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${
+              activeTab === 'logs'
+                ? 'text-indigo-400 border-b-2 border-indigo-400 bg-slate-800/50'
+                : 'text-slate-400 hover:text-slate-300 hover:bg-slate-800/30'
+            }`}
+          >
+            <Terminal size={16} />
+            Logs
+          </button>
+        </div>
 
-          {/* Worktree Info */}
-          {executionInfo && executionInfo.worktreePath && (
-            <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-lg p-3 text-sm">
-              <div className="flex items-center gap-2 text-indigo-400 mb-2">
-                <GitBranch size={14} />
-                <span className="font-medium">隔离执行环境</span>
+        {/* Content Area */}
+        <div className="flex-1 overflow-hidden relative bg-slate-900/20">
+          {/* Chat View */}
+          <div className={`absolute inset-0 flex flex-col overflow-y-auto p-4 space-y-4 ${activeTab === 'chat' ? 'z-10' : 'z-0 hidden'}`}>
+            {/* Task Description */}
+            {task.description && (
+              <div className="bg-slate-700/50 rounded-lg p-3 text-sm text-slate-300">
+                <div className="text-xs text-slate-500 mb-1">任务描述</div>
+                {task.description}
               </div>
-              <div className="space-y-1 text-slate-300">
-                <div className="flex items-center gap-2">
-                  <span className="text-slate-500">分支:</span>
-                  <code className="bg-slate-700 px-1.5 py-0.5 rounded text-xs">{executionInfo.branch}</code>
+            )}
+
+            {/* Worktree Info */}
+            {executionInfo && executionInfo.worktreePath && (
+              <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-lg p-3 text-sm">
+                <div className="flex items-center gap-2 text-indigo-400 mb-2">
+                  <GitBranch size={14} />
+                  <span className="font-medium">隔离执行环境</span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-slate-500">状态:</span>
-                  <span className={executionInfo.state.includes('running') ? 'text-indigo-400' : 
-                    executionInfo.state.includes('completed') ? 'text-emerald-400' : 
-                    executionInfo.state.includes('failed') ? 'text-rose-400' : 'text-slate-400'}>
-                    {executionInfo.state}
-                  </span>
+                <div className="space-y-1 text-slate-300">
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-500">分支:</span>
+                    <code className="bg-slate-700 px-1.5 py-0.5 rounded text-xs">{executionInfo.branch}</code>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-500">状态:</span>
+                    <span className={executionInfo.state.includes('running') ? 'text-indigo-400' : 
+                      executionInfo.state.includes('completed') ? 'text-emerald-400' : 
+                      executionInfo.state.includes('failed') ? 'text-rose-400' : 'text-slate-400'}>
+                      {executionInfo.state}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-slate-500">
+                    <span>路径:</span>
+                    <code className="bg-slate-700 px-1.5 py-0.5 rounded">{executionInfo.worktreePath}</code>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 text-xs text-slate-500">
-                  <span>路径:</span>
-                  <code className="bg-slate-700 px-1.5 py-0.5 rounded">{executionInfo.worktreePath}</code>
-                </div>
+                {/* Cleanup button for completed/failed sessions */}
+                {onCleanupWorktree && (executionInfo.state.includes('completed') || executionInfo.state.includes('failed') || executionInfo.state.includes('cancelled')) && (
+                  <button
+                    type="button"
+                    onClick={() => onCleanupWorktree(task.id)}
+                    className="mt-2 flex items-center gap-1.5 text-xs text-rose-400 hover:text-rose-300 transition-colors"
+                  >
+                    <Trash2 size={12} />
+                    清理 Worktree
+                  </button>
+                )}
               </div>
-              {/* Cleanup button for completed/failed sessions */}
-              {onCleanupWorktree && (executionInfo.state.includes('completed') || executionInfo.state.includes('failed') || executionInfo.state.includes('cancelled')) && (
-                <button
-                  type="button"
-                  onClick={() => onCleanupWorktree(task.id)}
-                  className="mt-2 flex items-center gap-1.5 text-xs text-rose-400 hover:text-rose-300 transition-colors"
-                >
-                  <Trash2 size={12} />
-                  清理 Worktree
-                </button>
-              )}
-            </div>
-          )}
+            )}
 
-          {/* No History Yet */}
-          {!history && !isLoading && (
-            <div className="text-center py-8 text-slate-500">
-              <p>点击"开始执行"让 AI 处理这个任务</p>
-            </div>
-          )}
+            {/* No History Yet */}
+            {!history && !isLoading && (
+              <div className="text-center py-8 text-slate-500">
+                <p>点击"开始执行"让 AI 处理这个任务</p>
+              </div>
+            )}
 
-          {/* Loading */}
-          {isLoading && !history && (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 size={24} className="animate-spin text-indigo-400" />
-            </div>
-          )}
+            {/* Loading */}
+            {isLoading && !history && (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 size={24} className="animate-spin text-indigo-400" />
+              </div>
+            )}
 
-          {/* Messages */}
-          {history?.messages.map((message) => (
-            <MessageBubble key={message.id} message={message} />
-          ))}
+            {/* Messages */}
+            {history?.messages.map((message) => (
+              <MessageBubble key={message.id} message={message} />
+            ))}
 
-          {/* Error */}
-          {error && (
-            <div className="bg-rose-500/10 border border-rose-500/20 rounded-lg p-3 text-sm text-rose-400">
-              {error}
-            </div>
-          )}
+            {/* Error */}
+            {error && (
+              <div className="bg-rose-500/10 border border-rose-500/20 rounded-lg p-3 text-sm text-rose-400">
+                {error}
+              </div>
+            )}
 
-          <div ref={messagesEndRef} />
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Logs View */}
+          <div className={`absolute inset-0 ${activeTab === 'logs' ? 'z-10' : 'z-0 hidden'}`}>
+            <ExecutionLogPanel taskId={task.id} />
+          </div>
         </div>
 
         {/* Actions Footer */}
-        <div className="p-4 border-t border-slate-700 space-y-3">
+        <div className="p-4 border-t border-slate-700 bg-slate-800 z-20 space-y-3">
           {/* Control Buttons */}
           <div className="flex gap-2">
             {canExecute && (
