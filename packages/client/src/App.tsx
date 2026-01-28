@@ -32,6 +32,7 @@ function App() {
     stopExecution: stopIsolatedExecution,
     getExecutionStatus,
     cleanupWorktree,
+    sendInput: sendInputToTask,
   } = useTaskExecutor();
 
   const {
@@ -106,8 +107,7 @@ function App() {
         baseBranch,
       });
     }
-    // Also trigger Socket.IO for real-time updates
-    executeTask(taskId);
+    // Socket.IO updates will come automatically via task:execution_event
   };
 
   const handleStopTask = async (taskId: string) => {
@@ -206,6 +206,7 @@ function App() {
           onExecute={handleExecuteTask}
           onStop={handleStopTask}
           onSendMessage={handleSendMessage}
+          onSendInput={sendInputToTask}
           onCleanupWorktree={handleCleanupWorktree}
         />
       )}

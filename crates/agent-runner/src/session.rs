@@ -13,7 +13,7 @@ use git_worktree::Worktree;
 
 use crate::error::{ExecutorError, Result};
 use crate::event::{AgentEvent, ExecutionEvent, ExecutionStatus};
-use crate::process::{AgentConfig, AgentProcess, AgentType, OutputReaderHandle};
+use crate::process::AgentType;
 
 /// State of an execution session
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,8 +178,13 @@ impl ExecutionSession {
         let _ = self.event_tx.send(event).await;
     }
 
-    /// Start the session (spawn the agent process)
-    pub async fn start(&mut self) -> Result<OutputReaderHandle> {
+    /// Get agent event sender
+    pub fn agent_event_sender(&self) -> mpsc::Sender<AgentEvent> {
+        self.agent_event_tx.clone()
+    }
+
+    /// Start the session (initialize state)
+    pub async fn start(&mut self) -> Result<()> {
         // Check state
         {
             let state = self.state.read().await;
@@ -205,26 +210,13 @@ impl ExecutionSession {
         }
         self.update_status(ExecutionStatus::Starting).await;
 
-        // Prepare config
-        let config = AgentConfig {
-            agent_type: self.agent_type,
-            working_dir: worktree_path.clone(),
-            prompt: self.prompt.clone(),
-            env: vec![],
-            timeout_seconds: 0,
-        };
-
-        // Spawn the agent
-        let process = AgentProcess::spawn(config, self.agent_event_tx.clone()).await?;
-        let handle = process.start_output_reader().await?;
-
         // Update state to running
         let started_at = Utc::now();
         self.started_at = Some(Instant::now());
         {
             let mut state = self.state.write().await;
             *state = SessionState::Running {
-                pid: handle.pid(),
+                pid: None,
                 started_at,
             };
         }
@@ -242,7 +234,7 @@ impl ExecutionSession {
         // Start forwarding agent events
         self.start_event_forwarder();
 
-        Ok(handle)
+        Ok(())
     }
 
     /// Start forwarding agent events to the main event stream

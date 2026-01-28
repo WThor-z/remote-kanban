@@ -8,6 +8,7 @@ use tracing::{debug, info, warn};
 
 use crate::error::{ExecutorError, Result};
 use crate::event::{AgentEvent, OutputStream};
+use crate::parser::create_parser;
 
 /// Supported agent types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,10 +108,21 @@ impl AgentProcess {
         );
 
         // Build the command
-        let mut cmd = Command::new(command);
+        let mut cmd = if cfg!(target_os = "windows") && command.ends_with(".cmd") {
+            let mut c = Command::new("cmd");
+            c.arg("/C").arg(command);
+            for arg in &args {
+                c.arg(arg);
+            }
+            c.arg(&config.prompt);
+            c
+        } else {
+            let mut c = Command::new(command);
+            c.args(&args).arg(&config.prompt);
+            c
+        };
+
         cmd.current_dir(&config.working_dir)
-            .args(&args)
-            .arg(&config.prompt)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -151,18 +163,20 @@ impl AgentProcess {
             .ok_or_else(|| ExecutorError::spawn_failed("Failed to capture stderr"))?;
 
         let event_tx = self.event_tx.clone();
+        let agent_type = self.agent_type;
 
         // Spawn stdout reader
         let stdout_tx = event_tx.clone();
         let stdout_handle = tokio::spawn(async move {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
+            let mut parser = create_parser(agent_type);
 
             while let Ok(Some(line)) = lines.next_line().await {
                 debug!("stdout: {}", line);
 
                 // Parse the line into an event
-                let event = parse_agent_output(&line, OutputStream::Stdout);
+                let event = parser.parse(&line, OutputStream::Stdout);
 
                 if stdout_tx.send(event).await.is_err() {
                     warn!("Event channel closed, stopping stdout reader");
@@ -176,14 +190,14 @@ impl AgentProcess {
         let stderr_handle = tokio::spawn(async move {
             let reader = BufReader::new(stderr);
             let mut lines = reader.lines();
+            // Use same parser logic for stderr, or maybe a specific one?
+            // For now, use the same parser as it handles raw output fallback
+            let mut parser = create_parser(agent_type);
 
             while let Ok(Some(line)) = lines.next_line().await {
                 debug!("stderr: {}", line);
 
-                let event = AgentEvent::RawOutput {
-                    stream: OutputStream::Stderr,
-                    content: line,
-                };
+                let event = parser.parse(&line, OutputStream::Stderr);
 
                 if stderr_tx.send(event).await.is_err() {
                     warn!("Event channel closed, stopping stderr reader");
@@ -236,54 +250,6 @@ impl OutputReaderHandle {
     }
 }
 
-/// Parse agent output into an event
-fn parse_agent_output(line: &str, stream: OutputStream) -> AgentEvent {
-    // Try to parse as JSON first (for structured output)
-    if let Ok(event) = serde_json::from_str::<AgentEvent>(line) {
-        return event;
-    }
-
-    // Check for common patterns
-    if line.starts_with("Thinking:") || line.starts_with("💭") {
-        return AgentEvent::Thinking {
-            content: line.trim_start_matches("Thinking:").trim().to_string(),
-        };
-    }
-
-    if line.starts_with("Running:") || line.starts_with("$") || line.starts_with(">") {
-        return AgentEvent::Command {
-            command: line
-                .trim_start_matches("Running:")
-                .trim_start_matches('$')
-                .trim_start_matches('>')
-                .trim()
-                .to_string(),
-            output: String::new(),
-            exit_code: None,
-        };
-    }
-
-    if line.contains("Error:") || line.contains("error:") {
-        return AgentEvent::Error {
-            message: line.to_string(),
-            recoverable: !line.contains("fatal"),
-        };
-    }
-
-    if line.contains("Complete") || line.contains("Done") || line.contains("Finished") {
-        return AgentEvent::Completed {
-            success: true,
-            summary: Some(line.to_string()),
-        };
-    }
-
-    // Default to raw output
-    AgentEvent::RawOutput {
-        stream,
-        content: line.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,19 +262,5 @@ mod tests {
         assert_eq!(AgentType::from_str("codex").unwrap(), AgentType::Codex);
         assert!(AgentType::from_str("unknown").is_err());
     }
-
-    #[test]
-    fn test_parse_agent_output() {
-        let thinking = parse_agent_output("Thinking: about the problem", OutputStream::Stdout);
-        assert!(matches!(thinking, AgentEvent::Thinking { .. }));
-
-        let command = parse_agent_output("$ ls -la", OutputStream::Stdout);
-        assert!(matches!(command, AgentEvent::Command { .. }));
-
-        let error = parse_agent_output("Error: something went wrong", OutputStream::Stdout);
-        assert!(matches!(error, AgentEvent::Error { .. }));
-
-        let raw = parse_agent_output("some random output", OutputStream::Stdout);
-        assert!(matches!(raw, AgentEvent::RawOutput { .. }));
-    }
 }
+

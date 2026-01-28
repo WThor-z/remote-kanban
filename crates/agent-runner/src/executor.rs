@@ -217,11 +217,21 @@ impl TaskExecutor {
                 session_id: session_id.to_string(),
             })?;
 
-        let session = session.read().await;
-        session.cancel().await;
+        let task_id = {
+            let session = session.read().await;
+            session.cancel().await;
+            session.task_id
+        };
 
-        // Note: The actual process killing would need to be handled
-        // by storing the OutputReaderHandle in the session
+        // Stop on worker
+        let worker_url = std::env::var("AGENT_WORKER_URL")
+            .unwrap_or_else(|_| "http://localhost:4000".to_string());
+        
+        let client = crate::client::WorkerClient::new(worker_url);
+        // Best effort stop
+        if let Err(e) = client.stop(task_id.to_string()).await {
+            warn!("Failed to stop remote task: {}", e);
+        }
 
         Ok(())
     }
@@ -274,16 +284,40 @@ impl TaskExecutor {
 
 /// Run a session (internal)
 async fn run_session(session: Arc<RwLock<ExecutionSession>>) -> Result<i32> {
-    // Start the agent process
-    let handle = {
+    // Start session (updates state)
+    {
         let mut session = session.write().await;
-        session.start().await?
+        session.start().await?;
+    }
+
+    // Get info needed for execution
+    let (task_id, prompt, worktree_path, agent_type, event_tx) = {
+        let session = session.read().await;
+        let worktree_path = session.worktree_path()
+            .ok_or(ExecutorError::WorktreePathNotFound { path: PathBuf::from("") })?
+            .clone();
+        (
+            session.task_id,
+            session.prompt.clone(),
+            worktree_path,
+            session.agent_type,
+            session.agent_event_sender(),
+        )
     };
 
-    // Wait for completion
-    let exit_code = handle.wait().await?;
-
-    Ok(exit_code)
+    // Execute via Worker
+    let worker_url = std::env::var("AGENT_WORKER_URL")
+        .unwrap_or_else(|_| "http://localhost:4000".to_string());
+    
+    let client = crate::client::WorkerClient::new(worker_url);
+    
+    match client.execute(task_id.to_string(), prompt, worktree_path, agent_type, event_tx).await {
+        Ok(_) => Ok(0),
+        Err(e) => {
+            error!("Execution failed: {}", e);
+            Err(e)
+        }
+    }
 }
 
 #[cfg(test)]

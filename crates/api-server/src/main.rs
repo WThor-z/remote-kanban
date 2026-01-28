@@ -54,7 +54,10 @@ async fn main() {
         app_state.task_store_arc(),
         data_dir.clone(),
     );
-    let (socket_layer, _io) = create_socket_layer(socket_state);
+    let (socket_layer, io) = create_socket_layer(socket_state);
+
+    // Set Socket.IO instance in AppState
+    app_state.set_socket_io(io.clone()).await;
 
     // REST API server (port 3001)
     let rest_app = Router::new()

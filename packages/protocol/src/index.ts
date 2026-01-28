@@ -6,6 +6,7 @@ export * from './kanban.js';
 
 // Re-export Agent types and utilities
 export * from './agent.js';
+export * from './execution.js';
 
 export interface Message {
   raw: string;
