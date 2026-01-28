@@ -25,6 +25,13 @@ struct StopRequest {
     task_id: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InputRequest {
+    task_id: String,
+    content: String,
+}
+
 pub struct WorkerClient {
     client: Client,
     url: String,
@@ -136,6 +143,17 @@ impl WorkerClient {
             .send()
             .await
             .map_err(|e| ExecutorError::execution_failed(format!("Failed to stop task: {}", e)))?;
+        Ok(())
+    }
+
+    pub async fn send_input(&self, task_id: String, content: String) -> Result<()> {
+        let req = InputRequest { task_id, content };
+        self.client
+            .post(format!("{}/input", self.url))
+            .json(&req)
+            .send()
+            .await
+            .map_err(|e| ExecutorError::execution_failed(format!("Failed to send input: {}", e)))?;
         Ok(())
     }
 }

@@ -22,11 +22,8 @@ use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct StartExecutionRequest {
-    /// Agent type (opencode, claude-code, gemini-cli, codex)
-    pub agent_type: String,
-    /// Base branch to create worktree from
-    pub base_branch: String,
+pub struct SendInputRequest {
+    pub content: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -339,6 +336,28 @@ async fn cleanup_worktree(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// POST /api/tasks/:id/input - Send input to task
+async fn send_input(
+    State(state): State<AppState>,
+    Path(task_id): Path<Uuid>,
+    Json(req): Json<SendInputRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .executor()
+        .send_input(task_id, req.content)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+
+    Ok(StatusCode::OK)
+}
+
 /// GET /api/sessions - List all sessions
 async fn list_sessions(
     State(state): State<AppState>,
@@ -415,6 +434,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/tasks/{id}/execute", post(start_execution))
         .route("/api/tasks/{id}/status", get(get_execution_status))
         .route("/api/tasks/{id}/stop", post(stop_execution))
+        .route("/api/tasks/{id}/input", post(send_input))
         .route("/api/tasks/{id}/worktree", delete(cleanup_worktree))
         // Session endpoints
         .route("/api/sessions", get(list_sessions))

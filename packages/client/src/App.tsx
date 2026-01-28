@@ -32,6 +32,7 @@ function App() {
     stopExecution: stopIsolatedExecution,
     getExecutionStatus,
     cleanupWorktree,
+    sendInput: sendInputToTask,
   } = useTaskExecutor();
 
   const {
@@ -205,6 +206,7 @@ function App() {
           onExecute={handleExecuteTask}
           onStop={handleStopTask}
           onSendMessage={handleSendMessage}
+          onSendInput={sendInputToTask}
           onCleanupWorktree={handleCleanupWorktree}
         />
       )}

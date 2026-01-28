@@ -28,15 +28,34 @@ fastify.post('/execute', async (request, reply) => {
         sendEvent({ type: 'status', status: 'starting' });
         // Mock execution for testing
         if (prompt.includes('mock-test')) {
-            sendEvent({ type: 'log', content: 'Mocking execution...' });
-            await new Promise(resolve => setTimeout(resolve, 500));
-            sendEvent({ type: 'log', content: 'Step 1: Analyzing request' });
-            await new Promise(resolve => setTimeout(resolve, 500));
-            sendEvent({ type: 'log', content: 'Thinking: I should generate a response.' });
-            await new Promise(resolve => setTimeout(resolve, 500));
-            sendEvent({ type: 'log', content: 'Step 2: Performing action' });
-            await new Promise(resolve => setTimeout(resolve, 500));
-            sendEvent({ type: 'log', content: 'Step 3: Verifying result' });
+            // ... existing mock code ...
+        }
+        // Debug Environment
+        if (prompt.includes('debug-env')) {
+            const debugCmd = process.platform === 'win32' ? 'cmd' : 'env';
+            const debugArgs = process.platform === 'win32' ? ['/c', 'set'] : [];
+            const debugProcess = execa(debugCmd, debugArgs, {
+                cwd,
+                env: {
+                    ...process.env,
+                    ...env,
+                    NO_COLOR: '1',
+                    HTTP_PROXY: '',
+                    HTTPS_PROXY: '',
+                    http_proxy: '',
+                    https_proxy: '',
+                    ALL_PROXY: '',
+                    all_proxy: '',
+                },
+                all: true,
+                reject: false
+            });
+            if (debugProcess.all) {
+                debugProcess.all.on('data', (chunk) => {
+                    sendEvent({ type: 'log', content: chunk.toString() });
+                });
+            }
+            await debugProcess;
             sendEvent({ type: 'status', status: 'completed' });
             reply.raw.end();
             return;

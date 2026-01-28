@@ -52,6 +52,7 @@ export interface UseTaskExecutorResult {
   stopExecution: (taskId: string) => Promise<boolean>;
   getExecutionStatus: (taskId: string) => Promise<SessionStatus | null>;
   cleanupWorktree: (taskId: string) => Promise<boolean>;
+  sendInput: (taskId: string, content: string) => Promise<boolean>;
   listSessions: () => Promise<SessionSummary[]>;
   clearError: () => void;
 }
@@ -183,6 +184,35 @@ export function useTaskExecutor(): UseTaskExecutorResult {
   );
 
   /**
+   * Send input to the running task
+   */
+  const sendInput = useCallback(
+    async (taskId: string, content: string): Promise<boolean> => {
+      setError(null);
+      try {
+        const response = await fetch(`${baseUrl}/api/tasks/${taskId}/input`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ content }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Failed to send input');
+        }
+
+        return true;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Unknown error');
+        return false;
+      }
+    },
+    [baseUrl]
+  );
+
+  /**
    * List all active sessions
    */
   const listSessions = useCallback(async (): Promise<SessionSummary[]> => {
@@ -210,6 +240,7 @@ export function useTaskExecutor(): UseTaskExecutorResult {
     stopExecution,
     getExecutionStatus,
     cleanupWorktree,
+    sendInput,
     listSessions,
     clearError,
   };

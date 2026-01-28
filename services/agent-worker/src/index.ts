@@ -125,6 +125,27 @@ fastify.post('/stop', async (request, reply) => {
   return { success: false, message: 'Task not found' };
 });
 
+fastify.post('/input', async (request, reply) => {
+  const InputSchema = z.object({ 
+    taskId: z.string(),
+    content: z.string() 
+  });
+  const { taskId, content } = InputSchema.parse(request.body);
+
+  const subprocess = activeProcesses.get(taskId);
+  if (subprocess && subprocess.stdin) {
+    try {
+      subprocess.stdin.write(content + '\n');
+      return { success: true };
+    } catch (e) {
+      request.log.error(e);
+      return { success: false, message: 'Failed to write to stdin' };
+    }
+  }
+  
+  return { success: false, message: 'Task not found or stdin unavailable' };
+});
+
 const start = async () => {
   try {
     await fastify.listen({ port: 4000, host: '0.0.0.0' });

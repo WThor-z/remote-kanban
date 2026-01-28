@@ -46,6 +46,7 @@ export function TaskDetailPanel({
   onStop,
   onSendMessage,
   onCleanupWorktree,
+  onSendInput,
 }: TaskDetailPanelProps) {
   const [inputValue, setInputValue] = useState('');
   const [activeTab, setActiveTab] = useState<'chat' | 'logs'>('chat');
@@ -207,7 +208,11 @@ export function TaskDetailPanel({
 
           {/* Logs View */}
           <div className={`absolute inset-0 ${activeTab === 'logs' ? 'z-10' : 'z-0 hidden'}`}>
-            <ExecutionLogPanel taskId={task.id} />
+            <ExecutionLogPanel 
+              taskId={task.id} 
+              onSendInput={onSendInput}
+              isRunning={isRunning}
+            />
           </div>
         </div>
 
