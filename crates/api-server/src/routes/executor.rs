@@ -11,7 +11,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use agent_runner::{ExecuteRequest, SessionState};
+use agent_runner::{ExecuteRequest, SessionState, ExecutionEventType, AgentEvent};
 use vk_core::task::TaskRepository;
 
 use crate::state::AppState;
@@ -116,7 +116,8 @@ async fn start_execution(
     };
 
     // Start execution
-    let (session_id, _event_rx) = state.executor().execute(execute_req).await.map_err(|e| {
+    let (session_id, mut event_rx) = state.executor().execute(execute_req).await.map_err(|e| {
+        tracing::error!("Failed to start execution: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
@@ -125,7 +126,76 @@ async fn start_execution(
         )
     })?;
 
-    // TODO: Store event_rx for WebSocket streaming
+    // Spawn event bridge to Socket.IO
+    let state_clone = state.clone();
+    // let task_id_clone = task_id;
+    tokio::spawn(async move {
+        let io = state_clone.get_socket_io().await;
+        if let Some(io) = io {
+            while let Some(event) = event_rx.recv().await {
+                // Emit structured event
+                // We emit to all clients. In production, we should emit to a room "task:{task_id}"
+                let _ = io.emit("task:execution_event", &event);
+                
+                // Compatibility mapping for existing UI components
+                match &event.event {
+                    agent_runner::ExecutionEventType::StatusChanged { new_status, .. } => {
+                        let status_str = match new_status {
+                            agent_runner::ExecutionStatus::Initializing |
+                            agent_runner::ExecutionStatus::CreatingWorktree |
+                            agent_runner::ExecutionStatus::Starting => "starting",
+                            agent_runner::ExecutionStatus::Running |
+                            agent_runner::ExecutionStatus::CleaningUp => "running",
+                            agent_runner::ExecutionStatus::Paused => "paused",
+                            agent_runner::ExecutionStatus::Completed => "completed",
+                            agent_runner::ExecutionStatus::Failed => "failed",
+                            agent_runner::ExecutionStatus::Cancelled => "aborted",
+                        };
+                        
+                        #[derive(Serialize)]
+                        struct StatusPayload {
+                            #[serde(rename = "taskId")]
+                            task_id: Uuid,
+                            status: String,
+                        }
+                        let _ = io.emit("task:status", &StatusPayload {
+                            task_id: event.task_id,
+                            status: status_str.to_string(),
+                        });
+                    },
+                    agent_runner::ExecutionEventType::AgentEvent { event: agent_event } => {
+                        match agent_event {
+                            agent_runner::AgentEvent::Message { content } | 
+                            agent_runner::AgentEvent::Thinking { content } |
+                            agent_runner::AgentEvent::Error { message: content, .. } |
+                            agent_runner::AgentEvent::RawOutput { content, .. } => {
+                                // Send as chat message
+                                let role = match agent_event {
+                                    agent_runner::AgentEvent::Thinking { .. } => "system",
+                                    agent_runner::AgentEvent::Error { .. } => "system",
+                                    _ => "assistant",
+                                };
+
+                                let content = match agent_event {
+                                    agent_runner::AgentEvent::Thinking { .. } => format!("💭 {}", content),
+                                    agent_runner::AgentEvent::Error { .. } => format!("❌ Error: {}", content),
+                                    _ => content.clone(),
+                                };
+                                
+                                emit_message(&io, event.task_id, event.id, role, content, event.timestamp.timestamp_millis());
+                            },
+                            agent_runner::AgentEvent::Command { command, output, .. } => {
+                                let content = format!("$ {}\n{}", command, output);
+                                emit_message(&io, event.task_id, event.id, "assistant", content, event.timestamp.timestamp_millis());
+                            },
+                            _ => {}
+                        }
+                    },
+                    _ => {}
+                }
+            }
+        }
+    });
 
     Ok((
         StatusCode::ACCEPTED,
@@ -136,6 +206,32 @@ async fn start_execution(
             message: "Execution started successfully".to_string(),
         }),
     ))
+}
+
+fn emit_message(io: &socketioxide::SocketIo, task_id: Uuid, id: Uuid, role: &str, content: String, timestamp: i64) {
+    #[derive(Serialize)]
+    struct MessagePayload {
+        #[serde(rename = "taskId")]
+        task_id: Uuid,
+        message: TaskMessage,
+    }
+    #[derive(Serialize)]
+    struct TaskMessage {
+        id: String,
+        role: String,
+        content: String,
+        timestamp: i64,
+    }
+
+    let _ = io.emit("task:message", &MessagePayload {
+        task_id,
+        message: TaskMessage {
+            id: id.to_string(),
+            role: role.to_string(),
+            content,
+            timestamp,
+        }
+    });
 }
 
 /// GET /api/tasks/:id/status - Get execution status

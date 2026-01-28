@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::RwLock;
+use socketioxide::SocketIo;
 
 use agent_runner::{ExecutorConfig, TaskExecutor};
 use git_worktree::WorktreeConfig;
@@ -18,6 +20,7 @@ struct AppStateInner {
     pub executor: Arc<TaskExecutor>,
     #[allow(dead_code)]
     pub repo_path: PathBuf,
+    pub socket_io: Arc<RwLock<Option<SocketIo>>>,
 }
 
 impl AppState {
@@ -52,8 +55,20 @@ impl AppState {
                 task_store,
                 executor: Arc::new(executor),
                 repo_path,
+                socket_io: Arc::new(RwLock::new(None)),
             }),
         })
+    }
+
+    /// Set Socket.IO instance
+    pub async fn set_socket_io(&self, io: SocketIo) {
+        let mut w = self.inner.socket_io.write().await;
+        *w = Some(io);
+    }
+
+    /// Get Socket.IO instance
+    pub async fn get_socket_io(&self) -> Option<SocketIo> {
+        self.inner.socket_io.read().await.clone()
     }
 
     /// Get reference to the task store

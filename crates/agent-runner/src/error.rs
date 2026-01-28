@@ -64,6 +64,10 @@ pub enum ExecutorError {
     /// Session is already running
     #[error("Session {session_id} is already running")]
     SessionAlreadyRunning { session_id: String },
+
+    /// Execution failed
+    #[error("Execution failed: {message}")]
+    ExecutionFailed { message: String },
 }
 
 impl ExecutorError {
@@ -80,6 +84,13 @@ impl ExecutorError {
         Self::SpawnFailed {
             message: message.into(),
             source: Some(source),
+        }
+    }
+
+    /// Create an ExecutionFailed error
+    pub fn execution_failed(message: impl Into<String>) -> Self {
+        Self::ExecutionFailed {
+            message: message.into(),
         }
     }
 }
