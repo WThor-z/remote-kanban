@@ -7,6 +7,7 @@
 
 import { useState, useCallback } from 'react';
 import type { AgentType } from '@opencode-vibe/protocol';
+import { resolveApiBaseUrl } from '../config/endpoints';
 
 // Types matching the Rust API
 export interface ExecutionResponse {
@@ -37,12 +38,7 @@ export interface StartExecutionRequest {
 }
 
 // API base URL
-const getApiBaseUrl = (): string => {
-  if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_RUST_API_URL) {
-    return import.meta.env.VITE_RUST_API_URL;
-  }
-  return 'http://localhost:8081';
-};
+const getApiBaseUrl = (): string => resolveApiBaseUrl();
 
 export interface UseTaskExecutorResult {
   isExecuting: boolean;

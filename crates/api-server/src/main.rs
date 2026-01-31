@@ -1,7 +1,7 @@
 //! API Server for OpenCode Vibe Kanban
 //!
 //! This is the main entry point for the Rust backend.
-//! It provides REST API on port 3001 and Socket.IO on port 3000.
+//! It provides REST API on port 8081 and Socket.IO on port 8080.
 
 mod routes;
 mod socket;
@@ -59,7 +59,7 @@ async fn main() {
     // Set Socket.IO instance in AppState
     app_state.set_socket_io(io.clone()).await;
 
-    // REST API server (port 3001)
+    // REST API server (port 8081)
     let rest_app = Router::new()
         .merge(routes::health::router())
         .merge(routes::task::router())
@@ -73,7 +73,7 @@ async fn main() {
         .layer(TraceLayer::new_for_http())
         .with_state(app_state);
 
-    // Socket.IO server (port 3000)
+    // Socket.IO server (port 8080)
     // Layers are applied bottom-to-top, so CorsLayer is added last to be applied first
     let socket_app = Router::new()
         .layer(

@@ -4,18 +4,31 @@ import { useKanban } from './hooks/useKanban';
 import { useTaskSession } from './hooks/useTaskSession';
 import { useTaskApi, type CreateTaskRequest } from './hooks/useTaskApi';
 import { useTaskExecutor } from './hooks/useTaskExecutor';
-import { Bot, Plus } from 'lucide-react';
+import { Bot, Plus, Server, HardDrive, Plug, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import { InputBar } from './components/InputBar';
 import { KanbanBoard } from './components/kanban/KanbanBoard';
 import { AgentPanel } from './components/agent';
 import { TaskDetailPanel, CreateTaskModal } from './components/task';
 import type { KanbanTask, AgentType } from '@opencode-vibe/protocol';
+import { useGatewayInfo } from './hooks/useGatewayInfo';
+import { resolveApiBaseUrl, resolveGatewaySocketUrl, resolveLegacySocketUrl } from './config/endpoints';
 
 function App() {
   const { isConnected, socket } = useOpencode();
   const { board, moveTask, deleteTask, requestSync } = useKanban();
   const [selectedTask, setSelectedTask] = useState<KanbanTask | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [showLegacyAgent, setShowLegacyAgent] = useState(false);
+
+  const gatewaySocketUrl = resolveGatewaySocketUrl();
+  const legacySocketUrl = resolveLegacySocketUrl();
+  const apiBaseUrl = resolveApiBaseUrl();
+  const {
+    info: gatewayInfo,
+    isLoading: gatewayInfoLoading,
+    error: gatewayInfoError,
+    refresh: refreshGatewayInfo,
+  } = useGatewayInfo();
 
   // Rust API hook for task management
   const {
@@ -41,7 +54,6 @@ function App() {
     isLoading,
     error,
     selectTask,
-    executeTask,
     stopTask,
     sendMessage,
   } = useTaskSession({ socket, isConnected });
@@ -166,16 +178,57 @@ function App() {
           <span className={`w-2 h-2 rounded-full mr-2 ${
             isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'
           }`}></span>
-          {isConnected ? 'Connected to Server' : 'Disconnected'}
+          {isConnected ? 'Gateway Connected' : 'Gateway Disconnected'}
         </div>
       </div>
 
-      {/* Agent Panel - Primary Interface */}
-      <div className="w-full max-w-6xl">
-        <AgentPanel />
+      {/* Gateway Status */}
+      <div className="w-full max-w-6xl bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+          <div className="flex items-center gap-2 text-slate-200">
+            <Server size={18} className="text-indigo-400" />
+            <span className="font-semibold">Gateway Status</span>
+            {gatewayInfo?.version && (
+              <span className="text-xs text-slate-400">v{gatewayInfo.version}</span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={refreshGatewayInfo}
+            className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-semibold rounded-full bg-slate-700/70 text-slate-200 hover:bg-slate-600"
+          >
+            <RefreshCw size={12} className={gatewayInfoLoading ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+          <div className="bg-slate-900/40 border border-slate-700/60 rounded-lg p-3">
+            <div className="text-xs text-slate-400 mb-1">Socket</div>
+            <div className="text-slate-200 break-all font-mono text-xs">{gatewaySocketUrl}</div>
+          </div>
+          <div className="bg-slate-900/40 border border-slate-700/60 rounded-lg p-3">
+            <div className="text-xs text-slate-400 mb-1">REST API</div>
+            <div className="text-slate-200 break-all font-mono text-xs">{apiBaseUrl}</div>
+          </div>
+          <div className="bg-slate-900/40 border border-slate-700/60 rounded-lg p-3">
+            <div className="flex items-center gap-1 text-xs text-slate-400 mb-1">
+              <Plug size={12} /> Worker
+            </div>
+            <div className="text-slate-200 break-all font-mono text-xs">{gatewayInfo?.workerUrl || 'unknown'}</div>
+          </div>
+          <div className="bg-slate-900/40 border border-slate-700/60 rounded-lg p-3">
+            <div className="flex items-center gap-1 text-xs text-slate-400 mb-1">
+              <HardDrive size={12} /> Data Dir
+            </div>
+            <div className="text-slate-200 break-all font-mono text-xs">{gatewayInfo?.dataDir || 'unknown'}</div>
+          </div>
+        </div>
+        {gatewayInfoError && (
+          <div className="mt-3 text-xs text-rose-400">{gatewayInfoError}</div>
+        )}
       </div>
 
-{/* Kanban Board */}
+      {/* Kanban Board */}
       <div className="w-full max-w-6xl">
         <KanbanBoard 
           board={board} 
@@ -187,6 +240,26 @@ function App() {
       </div>
 
       <InputBar />
+
+      {/* Legacy Agent Console */}
+      <div className="w-full max-w-6xl">
+        <button
+          type="button"
+          onClick={() => setShowLegacyAgent(!showLegacyAgent)}
+          className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-slate-800/70 border border-slate-700/60 text-slate-200"
+        >
+          <div>
+            <div className="text-sm font-semibold">Legacy Agent Console</div>
+            <div className="text-xs text-slate-400">Requires legacy TS server at {legacySocketUrl}</div>
+          </div>
+          {showLegacyAgent ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </button>
+        {showLegacyAgent && (
+          <div className="mt-3">
+            <AgentPanel />
+          </div>
+        )}
+      </div>
 
       {/* Task Detail Panel (Modal) */}
       {selectedTask && (

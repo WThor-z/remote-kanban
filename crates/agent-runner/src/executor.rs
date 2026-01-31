@@ -1,19 +1,64 @@
 //! Task executor - orchestrates task execution in isolated worktrees
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, RwLock};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use git_worktree::{WorktreeConfig, WorktreeManager};
+use git_worktree::{Worktree, WorktreeConfig, WorktreeManager};
 
+use crate::client::{WorkerClient, WorkerClientApi};
 use crate::error::{ExecutorError, Result};
 use crate::event::{ExecutionEvent, ExecutionStatus};
 use crate::process::AgentType;
 use crate::session::{ExecutionSession, SessionState};
+
+pub trait WorktreeManagerApi: Send + Sync {
+    fn create(
+        &self,
+        task_id: String,
+        base_branch: String,
+    ) -> Pin<Box<dyn Future<Output = Result<Worktree>> + Send + '_>>;
+
+    fn remove(
+        &self,
+        path: PathBuf,
+        force: bool,
+        delete_branches: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
+}
+
+impl WorktreeManagerApi for WorktreeManager {
+    fn create(
+        &self,
+        task_id: String,
+        base_branch: String,
+    ) -> Pin<Box<dyn Future<Output = Result<Worktree>> + Send + '_>> {
+        Box::pin(async move {
+            self.create(&task_id, &base_branch)
+                .await
+                .map_err(ExecutorError::from)
+        })
+    }
+
+    fn remove(
+        &self,
+        path: PathBuf,
+        force: bool,
+        delete_branches: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            self.remove(&path, force, delete_branches)
+                .await
+                .map_err(ExecutorError::from)
+        })
+    }
+}
 
 /// Configuration for the task executor
 #[derive(Debug, Clone)]
@@ -57,7 +102,9 @@ pub struct TaskExecutor {
     /// Configuration
     config: ExecutorConfig,
     /// Worktree manager
-    worktree_manager: Arc<WorktreeManager>,
+    worktree_manager: Arc<dyn WorktreeManagerApi>,
+    /// Worker client
+    worker_client: Arc<dyn WorkerClientApi>,
     /// Active sessions by session ID
     sessions: Arc<RwLock<HashMap<Uuid, Arc<RwLock<ExecutionSession>>>>>,
     /// Sessions by task ID (for lookup)
@@ -73,12 +120,29 @@ impl TaskExecutor {
         )
         .await?;
 
-        Ok(Self {
+        let worker_url = std::env::var("AGENT_WORKER_URL")
+            .unwrap_or_else(|_| "http://localhost:4000".to_string());
+        let worker_client = WorkerClient::new(worker_url);
+
+        Ok(Self::new_with_dependencies(
             config,
-            worktree_manager: Arc::new(worktree_manager),
+            Arc::new(worktree_manager),
+            Arc::new(worker_client),
+        ))
+    }
+
+    fn new_with_dependencies(
+        config: ExecutorConfig,
+        worktree_manager: Arc<dyn WorktreeManagerApi>,
+        worker_client: Arc<dyn WorkerClientApi>,
+    ) -> Self {
+        Self {
+            config,
+            worktree_manager,
+            worker_client,
             sessions: Arc::new(RwLock::new(HashMap::new())),
             task_sessions: Arc::new(RwLock::new(HashMap::new())),
-        })
+        }
     }
 
     /// Execute a task
@@ -126,7 +190,7 @@ impl TaskExecutor {
         let task_id_str = request.task_id.to_string();
         let worktree = self
             .worktree_manager
-            .create(&task_id_str, &request.base_branch)
+            .create(task_id_str.clone(), request.base_branch.clone())
             .await?;
 
         info!(
@@ -156,11 +220,12 @@ impl TaskExecutor {
         // Start execution in background
         let session_clone = Arc::clone(&session);
         let worktree_manager = Arc::clone(&self.worktree_manager);
+        let worker_client = Arc::clone(&self.worker_client);
         let auto_cleanup = self.config.auto_cleanup;
         let delete_branches = self.config.delete_branches;
 
         tokio::spawn(async move {
-            let result = run_session(session_clone.clone()).await;
+            let result = run_session(session_clone.clone(), worker_client).await;
 
             match result {
                 Ok(exit_code) => {
@@ -180,7 +245,7 @@ impl TaskExecutor {
                 let session = session_clone.read().await;
                 if let Some(worktree) = &session.worktree {
                     if let Err(e) = worktree_manager
-                        .remove(&worktree.path, true, delete_branches)
+                        .remove(worktree.path.clone(), true, delete_branches)
                         .await
                     {
                         warn!("Failed to cleanup worktree: {}", e);
@@ -223,13 +288,8 @@ impl TaskExecutor {
             session.task_id
         };
 
-        // Stop on worker
-        let worker_url = std::env::var("AGENT_WORKER_URL")
-            .unwrap_or_else(|_| "http://localhost:4000".to_string());
-        
-        let client = crate::client::WorkerClient::new(worker_url);
-        // Best effort stop
-        if let Err(e) = client.stop(task_id.to_string()).await {
+        // Stop on worker (best effort)
+        if let Err(e) = self.worker_client.stop(task_id.to_string()).await {
             warn!("Failed to stop remote task: {}", e);
         }
 
@@ -269,7 +329,7 @@ impl TaskExecutor {
 
         if let Some(worktree) = &session.worktree {
             self.worktree_manager
-                .remove(&worktree.path, force, self.config.delete_branches)
+                .remove(worktree.path.clone(), force, self.config.delete_branches)
                 .await?;
         }
 
@@ -277,13 +337,38 @@ impl TaskExecutor {
     }
 
     /// Get the worktree manager
-    pub fn worktree_manager(&self) -> &WorktreeManager {
-        &self.worktree_manager
+    pub fn worktree_manager(&self) -> &dyn WorktreeManagerApi {
+        self.worktree_manager.as_ref()
+    }
+
+    /// Send input to a running session
+    pub async fn send_input(&self, task_id: Uuid, content: String) -> Result<()> {
+        let session = self
+            .get_session_by_task(task_id)
+            .await
+            .ok_or_else(|| ExecutorError::SessionNotFoundForTask {
+                task_id: task_id.to_string(),
+            })?;
+
+        let session = session.read().await;
+        let state = session.state().await;
+        if !state.is_running() {
+            return Err(ExecutorError::SessionNotRunning {
+                session_id: session.id.to_string(),
+            });
+        }
+
+        self.worker_client
+            .send_input(task_id.to_string(), content)
+            .await
     }
 }
 
 /// Run a session (internal)
-async fn run_session(session: Arc<RwLock<ExecutionSession>>) -> Result<i32> {
+async fn run_session(
+    session: Arc<RwLock<ExecutionSession>>,
+    worker_client: Arc<dyn WorkerClientApi>,
+) -> Result<i32> {
     // Start session (updates state)
     {
         let mut session = session.write().await;
@@ -306,12 +391,10 @@ async fn run_session(session: Arc<RwLock<ExecutionSession>>) -> Result<i32> {
     };
 
     // Execute via Worker
-    let worker_url = std::env::var("AGENT_WORKER_URL")
-        .unwrap_or_else(|_| "http://localhost:4000".to_string());
-    
-    let client = crate::client::WorkerClient::new(worker_url);
-    
-    match client.execute(task_id.to_string(), prompt, worktree_path, agent_type, event_tx).await {
+    match worker_client
+        .execute(task_id.to_string(), prompt, worktree_path, agent_type, event_tx)
+        .await
+    {
         Ok(_) => Ok(0),
         Err(e) => {
             error!("Execution failed: {}", e);
@@ -323,7 +406,73 @@ async fn run_session(session: Arc<RwLock<ExecutionSession>>) -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use git_worktree::WorktreeConfig;
+    use crate::client::WorkerClientApi;
+    use crate::event::AgentEvent;
+    use git_worktree::{Worktree, WorktreeStatus};
+    use tokio::sync::Mutex;
+
+    struct MockWorktreeManager;
+
+    impl WorktreeManagerApi for MockWorktreeManager {
+        fn create(
+            &self,
+            task_id: String,
+            _base_branch: String,
+        ) -> Pin<Box<dyn Future<Output = Result<Worktree>> + Send + '_>> {
+            let worktree = Worktree {
+                path: PathBuf::from("mock-worktree"),
+                branch: format!("task/{}", task_id),
+                head: "mock-head".to_string(),
+                status: WorktreeStatus::Active,
+                is_main: false,
+            };
+            Box::pin(async move { Ok(worktree) })
+        }
+
+        fn remove(
+            &self,
+            _path: PathBuf,
+            _force: bool,
+            _delete_branches: bool,
+        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
+
+    #[derive(Default)]
+    struct MockWorkerClient {
+        inputs: Arc<Mutex<Vec<(String, String)>>>,
+    }
+
+    impl WorkerClientApi for MockWorkerClient {
+        fn execute(
+            &self,
+            _task_id: String,
+            _prompt: String,
+            _cwd: PathBuf,
+            _agent_type: AgentType,
+            _event_tx: mpsc::Sender<AgentEvent>,
+        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+            Box::pin(async move { Ok(()) })
+        }
+
+        fn stop(&self, _task_id: String) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+            Box::pin(async move { Ok(()) })
+        }
+
+        fn send_input(
+            &self,
+            task_id: String,
+            content: String,
+        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+            let inputs = Arc::clone(&self.inputs);
+            Box::pin(async move {
+                let mut guard = inputs.lock().await;
+                guard.push((task_id, content));
+                Ok(())
+            })
+        }
+    }
 
     #[test]
     fn test_executor_config_default() {
@@ -342,5 +491,99 @@ mod tests {
         };
 
         assert!(!request.task_id.is_nil());
+    }
+
+    #[tokio::test]
+    async fn send_input_returns_error_when_no_session() {
+        let worktree_manager: Arc<dyn WorktreeManagerApi> = Arc::new(MockWorktreeManager);
+        let worker_client: Arc<dyn WorkerClientApi> = Arc::new(MockWorkerClient::default());
+        let executor = TaskExecutor::new_with_dependencies(
+            ExecutorConfig::default(),
+            worktree_manager,
+            worker_client,
+        );
+
+        let task_id = Uuid::new_v4();
+        let result = executor.send_input(task_id, "hello".to_string()).await;
+
+        match result {
+            Err(ExecutorError::SessionNotFoundForTask { task_id: err_task_id }) => {
+                assert_eq!(err_task_id, task_id.to_string());
+            }
+            other => panic!("Unexpected result: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn send_input_returns_error_when_session_not_running() {
+        let worktree_manager: Arc<dyn WorktreeManagerApi> = Arc::new(MockWorktreeManager);
+        let worker_client: Arc<dyn WorkerClientApi> = Arc::new(MockWorkerClient::default());
+        let executor = TaskExecutor::new_with_dependencies(
+            ExecutorConfig::default(),
+            worktree_manager,
+            worker_client,
+        );
+
+        let task_id = Uuid::new_v4();
+        let session = ExecutionSession::new(
+            task_id,
+            AgentType::OpenCode,
+            "prompt".to_string(),
+            "main".to_string(),
+        );
+        let session_id = session.id;
+        let session = Arc::new(RwLock::new(session));
+
+        executor.sessions.write().await.insert(session_id, Arc::clone(&session));
+        executor.task_sessions.write().await.insert(task_id, session_id);
+
+        let result = executor.send_input(task_id, "input".to_string()).await;
+
+        match result {
+            Err(ExecutorError::SessionNotRunning { session_id: err_session_id }) => {
+                assert_eq!(err_session_id, session_id.to_string());
+            }
+            other => panic!("Unexpected result: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn send_input_for_running_session_is_forwarded_to_worker() {
+        let worktree_manager: Arc<dyn WorktreeManagerApi> = Arc::new(MockWorktreeManager);
+        let mock_worker = Arc::new(MockWorkerClient::default());
+        let worker_client: Arc<dyn WorkerClientApi> = mock_worker.clone();
+        let executor = TaskExecutor::new_with_dependencies(
+            ExecutorConfig::default(),
+            worktree_manager,
+            worker_client,
+        );
+
+        let task_id = Uuid::new_v4();
+        let mut session = ExecutionSession::new(
+            task_id,
+            AgentType::OpenCode,
+            "prompt".to_string(),
+            "main".to_string(),
+        );
+        session.set_worktree(Worktree {
+            path: PathBuf::from("mock-worktree"),
+            branch: "task/mock".to_string(),
+            head: "mock-head".to_string(),
+            status: WorktreeStatus::Active,
+            is_main: false,
+        });
+        session.start().await.expect("session start");
+
+        let session_id = session.id;
+        let session = Arc::new(RwLock::new(session));
+        executor.sessions.write().await.insert(session_id, Arc::clone(&session));
+        executor.task_sessions.write().await.insert(task_id, session_id);
+
+        executor.send_input(task_id, "ping".to_string()).await.expect("send input");
+
+        let inputs = mock_worker.inputs.lock().await;
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].0, task_id.to_string());
+        assert_eq!(inputs[0].1, "ping");
     }
 }

@@ -11,7 +11,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use agent_runner::{ExecuteRequest, SessionState, ExecutionEventType, AgentEvent};
+use agent_runner::{ExecuteRequest, SessionState};
 use vk_core::task::TaskRepository;
 
 use crate::state::AppState;
@@ -19,6 +19,13 @@ use crate::state::AppState;
 // ============================================================================
 // Request/Response types
 // ============================================================================
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartExecutionRequest {
+    pub agent_type: String,
+    pub base_branch: String,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -439,4 +446,20 @@ pub fn router() -> Router<AppState> {
         // Session endpoints
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/{id}", get(get_session))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn start_execution_request_deserializes_camel_case() {
+        let value = serde_json::json!({
+            "agentType": "opencode",
+            "baseBranch": "main"
+        });
+        let req: StartExecutionRequest = serde_json::from_value(value).expect("valid payload");
+        assert_eq!(req.agent_type, "opencode");
+        assert_eq!(req.base_branch, "main");
+    }
 }

@@ -7,6 +7,7 @@
 
 import { useState, useCallback } from 'react';
 import type { AgentType } from '@opencode-vibe/protocol';
+import { resolveApiBaseUrl } from '../config/endpoints';
 
 // Types matching the Rust API
 export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done';
@@ -39,13 +40,8 @@ export interface UpdateTaskRequest {
   priority?: TaskPriority;
 }
 
-// API base URL - defaults to Rust backend REST API (port 3001)
-const getApiBaseUrl = (): string => {
-  if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_RUST_API_URL) {
-    return import.meta.env.VITE_RUST_API_URL;
-  }
-  return 'http://localhost:3001';
-};
+// API base URL - defaults to Rust backend REST API (port 8081)
+const getApiBaseUrl = (): string => resolveApiBaseUrl();
 
 export interface UseTaskApiResult {
   tasks: Task[];

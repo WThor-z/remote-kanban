@@ -7,26 +7,13 @@ import type {
   AgentStatusEvent,
   AgentTaskDetectedEvent,
 } from '@opencode-vibe/protocol';
+import { resolveLegacySocketUrl } from '../config/endpoints';
 
 // Singleton socket (shared with useOpencode)
 let socket: Socket | undefined;
 let socketUrl: string | undefined;
 
-const resolveSocketUrl = () => {
-  const envUrl = typeof import.meta !== 'undefined'
-    ? import.meta.env?.VITE_OPENCODE_SOCKET_URL
-    : undefined;
-
-  if (envUrl) {
-    return envUrl;
-  }
-
-  if (typeof process !== 'undefined' && process.env?.OPENCODE_SOCKET_URL) {
-    return process.env.OPENCODE_SOCKET_URL;
-  }
-
-  return 'http://localhost:3000';
-};
+const resolveSocketUrl = () => resolveLegacySocketUrl();
 
 const getSocket = (): Socket => {
   const url = resolveSocketUrl();

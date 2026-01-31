@@ -22,6 +22,7 @@ interface TaskDetailPanelProps {
   onStop: (taskId: string) => void;
   onSendMessage: (taskId: string, content: string) => void;
   onCleanupWorktree?: (taskId: string) => void;
+  onSendInput?: (taskId: string, content: string) => Promise<boolean>;
 }
 
 const statusConfig: Record<AgentSessionStatus, { icon: React.ReactNode; label: string; color: string }> = {
