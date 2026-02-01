@@ -3,11 +3,12 @@
 //! RESTful API for task CRUD operations.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::get,
     Json, Router,
 };
+use agent_runner::{ExecutionEvent, ExecutionStatus, RunSummary};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -57,6 +58,59 @@ pub struct TaskResponse {
     pub base_branch: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunSummaryResponse {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub agent_type: String,
+    pub prompt_preview: String,
+    pub created_at: String,
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub status: ExecutionStatus,
+    pub event_count: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunEventsQuery {
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub event_type: Option<String>,
+    #[serde(default)]
+    pub agent_event_type: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunEventsResponse {
+    pub events: Vec<ExecutionEvent>,
+    pub has_more: bool,
+    pub next_offset: Option<usize>,
+}
+
+impl From<RunSummary> for RunSummaryResponse {
+    fn from(run: RunSummary) -> Self {
+        Self {
+            id: run.id,
+            task_id: run.task_id,
+            agent_type: run.agent_type.as_str().to_string(),
+            prompt_preview: run.prompt_preview,
+            created_at: run.created_at.to_rfc3339(),
+            started_at: run.started_at.map(|t| t.to_rfc3339()),
+            ended_at: run.ended_at.map(|t| t.to_rfc3339()),
+            duration_ms: run.duration_ms,
+            status: run.status,
+            event_count: run.event_count,
+        }
+    }
 }
 
 impl From<Task> for TaskResponse {
@@ -170,6 +224,113 @@ async fn get_task(
     }
 }
 
+/// GET /api/tasks/:id/runs - List all runs for a task
+async fn list_task_runs(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<RunSummaryResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    let task = state.task_store().get(id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    if task.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Task {} not found", id),
+            }),
+        ));
+    }
+
+    let runs = state.executor().list_runs(id).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    Ok(Json(
+        runs.into_iter().map(RunSummaryResponse::from).collect(),
+    ))
+}
+
+/// GET /api/tasks/:id/runs/:run_id/events - List events for a run
+async fn list_run_events(
+    State(state): State<AppState>,
+    Path((task_id, run_id)): Path<(Uuid, Uuid)>,
+    Query(query): Query<RunEventsQuery>,
+) -> Result<Json<RunEventsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let task = state.task_store().get(task_id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    if task.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Task {} not found", task_id),
+            }),
+        ));
+    }
+
+    let runs = state.executor().list_runs(task_id).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    if !runs.iter().any(|run| run.id == run_id) {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Run {} not found", run_id),
+            }),
+        ));
+    }
+
+    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.unwrap_or(200).min(1000);
+
+    let (events, has_more) = state.executor().load_run_events(
+        task_id,
+        run_id,
+        offset,
+        limit,
+        query.event_type,
+        query.agent_event_type,
+    ).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    let next_offset = if has_more { Some(offset + events.len()) } else { None };
+
+    Ok(Json(RunEventsResponse {
+        events,
+        has_more,
+        next_offset,
+    }))
+}
+
 /// PATCH /api/tasks/:id - Update a task
 async fn update_task(
     State(state): State<AppState>,
@@ -272,4 +433,6 @@ pub fn router() -> Router<AppState> {
             "/api/tasks/{id}",
             get(get_task).patch(update_task).delete(delete_task),
         )
+        .route("/api/tasks/{id}/runs", get(list_task_runs))
+        .route("/api/tasks/{id}/runs/{run_id}/events", get(list_run_events))
 }

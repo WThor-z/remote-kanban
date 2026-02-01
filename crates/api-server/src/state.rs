@@ -36,6 +36,7 @@ impl AppState {
 
         // Create executor config
         let executor_config = ExecutorConfig {
+            data_dir: data_dir.clone(),
             repo_path: repo_path.clone(),
             worktree_config: WorktreeConfig {
                 worktree_dir: data_dir.join("worktrees"),

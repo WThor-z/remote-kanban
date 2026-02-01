@@ -16,6 +16,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use crate::gateway::{GatewayManager, start_heartbeat_checker};
 use crate::socket::{create_socket_layer, SocketState};
 use crate::state::AppState;
 use vk_core::kanban::KanbanStore;
@@ -38,10 +39,15 @@ async fn main() {
 
     tracing::info!("Using data directory: {:?}", data_dir);
 
-    // Create application state for REST API
+// Create application state for REST API
     let app_state = AppState::new(data_dir.clone())
         .await
         .expect("Failed to initialize application state");
+
+    // Create Gateway Manager for Agent Gateway connections
+    let gateway_manager = Arc::new(GatewayManager::new());
+    start_heartbeat_checker(Arc::clone(&gateway_manager));
+    tracing::info!("Gateway Manager initialized");
 
     // Create kanban store for Socket.IO - synced with TaskStore
     let kanban_path = data_dir.join("kanban.json");
@@ -60,19 +66,20 @@ async fn main() {
     // Set Socket.IO instance in AppState
     app_state.set_socket_io(io.clone()).await;
 
-    // REST API server (port 8081)
+// REST API server (port 8081)
     let rest_app = Router::new()
         .merge(routes::health::router())
         .merge(routes::task::router())
         .merge(routes::executor::router())
+        .with_state(app_state)
+        .merge(routes::gateway::router(Arc::clone(&gateway_manager)))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
                 .allow_methods(Any)
                 .allow_headers(Any),
         )
-        .layer(TraceLayer::new_for_http())
-        .with_state(app_state);
+        .layer(TraceLayer::new_for_http());
 
     // Socket.IO server (port 8080)
     // Layers are applied bottom-to-top, so CorsLayer is added last to be applied first
