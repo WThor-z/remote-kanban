@@ -3,6 +3,7 @@
 //! This is the main entry point for the Rust backend.
 //! It provides REST API on port 8081 and Socket.IO on port 8080.
 
+mod gateway;
 mod routes;
 mod socket;
 mod state;
