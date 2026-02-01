@@ -4,5 +4,7 @@
 //! that execute tasks on behalf of the server.
 
 pub mod protocol;
+pub mod manager;
 
 pub use protocol::*;
+pub use manager::{GatewayManager, HostConnection, BroadcastTaskEvent};
