@@ -16,3 +16,6 @@ export * from './agent';
 
 // Event types (WebSocket)
 export * from './event';
+
+// Gateway types (Agent Gateway protocol)
+export * from './gateway';
