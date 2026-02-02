@@ -269,26 +269,32 @@ impl Default for GatewayManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    fn create_test_capabilities() -> HostCapabilities {
+        HostCapabilities {
+            name: "Test Host".to_string(),
+            agents: vec!["opencode".to_string()],
+            max_concurrent: 2,
+            cwd: "/home/user".to_string(),
+            labels: HashMap::new(),
+        }
+    }
 
     #[tokio::test]
     async fn test_register_and_list_hosts() {
         let manager = GatewayManager::new();
         let (tx, _rx) = mpsc::channel(10);
 
-        let capabilities = HostCapabilities {
-            name: "Test Host".to_string(),
-            agents: vec!["opencode".to_string()],
-            max_concurrent: 2,
-            cwd: "/home/user".to_string(),
-            labels: HashMap::new(),
-        };
-
-        manager.register_host("host-1".to_string(), capabilities, tx).await;
+        manager
+            .register_host("host-1".to_string(), create_test_capabilities(), tx)
+            .await;
 
         let hosts = manager.list_hosts().await;
         assert_eq!(hosts.len(), 1);
         assert_eq!(hosts[0].host_id, "host-1");
         assert_eq!(hosts[0].name, "Test Host");
+        assert_eq!(hosts[0].status, HostConnectionStatus::Online);
     }
 
     #[tokio::test]
@@ -296,18 +302,228 @@ mod tests {
         let manager = GatewayManager::new();
         let (tx, _rx) = mpsc::channel(10);
 
-        let capabilities = HostCapabilities {
-            name: "Test Host".to_string(),
-            agents: vec!["opencode".to_string()],
-            max_concurrent: 2,
-            cwd: "/home/user".to_string(),
-            labels: HashMap::new(),
-        };
-
-        manager.register_host("host-1".to_string(), capabilities, tx).await;
+        manager
+            .register_host("host-1".to_string(), create_test_capabilities(), tx)
+            .await;
         assert_eq!(manager.host_count().await, 1);
 
         manager.unregister_host("host-1").await;
         assert_eq!(manager.host_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_register_replaces_existing() {
+        let manager = GatewayManager::new();
+        let (tx1, _rx1) = mpsc::channel(10);
+        let (tx2, _rx2) = mpsc::channel(10);
+
+        manager
+            .register_host("host-1".to_string(), create_test_capabilities(), tx1)
+            .await;
+
+        // Register same host again
+        let mut caps2 = create_test_capabilities();
+        caps2.name = "Updated Host".to_string();
+        manager
+            .register_host("host-1".to_string(), caps2, tx2)
+            .await;
+
+        let hosts = manager.list_hosts().await;
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].name, "Updated Host");
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_task_success() {
+        let manager = GatewayManager::new();
+        let (tx, mut rx) = mpsc::channel(10);
+
+        manager
+            .register_host("host-1".to_string(), create_test_capabilities(), tx)
+            .await;
+
+        let task = GatewayTaskRequest {
+            task_id: "task-1".to_string(),
+            prompt: "test prompt".to_string(),
+            cwd: "/tmp".to_string(),
+            agent_type: "opencode".to_string(),
+            model: None,
+            env: HashMap::new(),
+            timeout: None,
+            metadata: serde_json::Value::Null,
+        };
+
+        let result = manager.dispatch_task(task).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "host-1");
+
+        // Should have received the task
+        let msg = rx.recv().await;
+        assert!(matches!(msg, Some(ServerToGatewayMessage::TaskExecute { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_task_no_available_host() {
+        let manager = GatewayManager::new();
+
+        let task = GatewayTaskRequest {
+            task_id: "task-1".to_string(),
+            prompt: "test prompt".to_string(),
+            cwd: "/tmp".to_string(),
+            agent_type: "opencode".to_string(),
+            model: None,
+            env: HashMap::new(),
+            timeout: None,
+            metadata: serde_json::Value::Null,
+        };
+
+        let result = manager.dispatch_task(task).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No available host"));
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_task_wrong_agent_type() {
+        let manager = GatewayManager::new();
+        let (tx, _rx) = mpsc::channel(10);
+
+        manager
+            .register_host("host-1".to_string(), create_test_capabilities(), tx)
+            .await;
+
+        let task = GatewayTaskRequest {
+            task_id: "task-1".to_string(),
+            prompt: "test prompt".to_string(),
+            cwd: "/tmp".to_string(),
+            agent_type: "claude-code".to_string(), // Not supported by test host
+            model: None,
+            env: HashMap::new(),
+            timeout: None,
+            metadata: serde_json::Value::Null,
+        };
+
+        let result = manager.dispatch_task(task).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_handle_task_completed_removes_from_active() {
+        let manager = GatewayManager::new();
+        let (tx, _rx) = mpsc::channel(10);
+
+        manager
+            .register_host("host-1".to_string(), create_test_capabilities(), tx)
+            .await;
+
+        let task = GatewayTaskRequest {
+            task_id: "task-1".to_string(),
+            prompt: "test".to_string(),
+            cwd: "/tmp".to_string(),
+            agent_type: "opencode".to_string(),
+            model: None,
+            env: HashMap::new(),
+            timeout: None,
+            metadata: serde_json::Value::Null,
+        };
+
+        let _ = manager.dispatch_task(task).await;
+
+        // Host should now be busy
+        let hosts = manager.list_hosts().await;
+        assert_eq!(hosts[0].active_tasks.len(), 1);
+
+        // Complete the task
+        manager
+            .handle_task_completed(
+                "host-1",
+                "task-1",
+                TaskResult {
+                    success: true,
+                    exit_code: Some(0),
+                    output: None,
+                    duration: Some(100),
+                    files_changed: vec![],
+                },
+            )
+            .await;
+
+        // Host should be online again
+        let hosts = manager.list_hosts().await;
+        assert_eq!(hosts[0].active_tasks.len(), 0);
+        assert_eq!(hosts[0].status, HostConnectionStatus::Online);
+    }
+
+    #[tokio::test]
+    async fn test_heartbeat_update() {
+        let manager = GatewayManager::new();
+        let (tx, _rx) = mpsc::channel(10);
+
+        manager
+            .register_host("host-1".to_string(), create_test_capabilities(), tx)
+            .await;
+
+        // Wait a bit
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let hosts1 = manager.list_hosts().await;
+        let last_hb1 = hosts1[0].last_heartbeat;
+
+        // Update heartbeat
+        manager.update_heartbeat("host-1").await;
+
+        let hosts2 = manager.list_hosts().await;
+        let last_hb2 = hosts2[0].last_heartbeat;
+
+        // last_heartbeat should be smaller (more recent) after update
+        assert!(last_hb2 <= last_hb1);
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_stale_connections() {
+        let manager = GatewayManager::new();
+        let (tx, _rx) = mpsc::channel(10);
+
+        manager
+            .register_host("host-1".to_string(), create_test_capabilities(), tx)
+            .await;
+
+        assert_eq!(manager.host_count().await, 1);
+
+        // Cleanup with very short timeout should remove the host
+        manager
+            .cleanup_stale_connections(Duration::from_nanos(1))
+            .await;
+
+        // Wait a tiny bit for cleanup to complete
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        assert_eq!(manager.host_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_event_broadcast() {
+        let manager = GatewayManager::new();
+        let mut receiver = manager.subscribe();
+        let (tx, _rx) = mpsc::channel(10);
+
+        manager
+            .register_host("host-1".to_string(), create_test_capabilities(), tx)
+            .await;
+
+        let event = GatewayAgentEvent {
+            event_type: GatewayAgentEventType::Log,
+            content: Some("Test log".to_string()),
+            data: serde_json::Value::Null,
+            timestamp: 12345,
+        };
+
+        manager.handle_task_event("host-1", "task-1", event).await;
+
+        // Should receive the broadcast
+        let received = receiver.try_recv();
+        assert!(received.is_ok());
+        let broadcast = received.unwrap();
+        assert_eq!(broadcast.task_id, "task-1");
+        assert_eq!(broadcast.host_id, "host-1");
     }
 }
