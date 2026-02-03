@@ -21,6 +21,26 @@ export interface TaskRequest {
   metadata?: Record<string, unknown>;
 }
 
+/** Model information from OpenCode */
+export interface ModelInfo {
+  id: string;
+  providerId: string;
+  name: string;
+  capabilities?: {
+    temperature: boolean;
+    reasoning: boolean;
+    attachment: boolean;
+    toolcall: boolean;
+  };
+}
+
+/** Provider information from OpenCode */
+export interface ProviderInfo {
+  id: string;
+  name: string;
+  models: ModelInfo[];
+}
+
 /** Gateway agent event types */
 export type GatewayAgentEventType = 
   | 'log' 
@@ -29,7 +49,10 @@ export type GatewayAgentEventType =
   | 'tool_result' 
   | 'file_change' 
   | 'message' 
-  | 'error';
+  | 'error'
+  | 'stdout'
+  | 'stderr'
+  | 'output';
 
 /** Gateway agent event */
 export interface GatewayAgentEvent {
@@ -55,7 +78,8 @@ export type GatewayToServerMessage =
   | { type: 'task:started'; taskId: string; sessionId: string }
   | { type: 'task:event'; taskId: string; event: GatewayAgentEvent }
   | { type: 'task:completed'; taskId: string; result: TaskResult }
-  | { type: 'task:failed'; taskId: string; error: string; details?: unknown };
+  | { type: 'task:failed'; taskId: string; error: string; details?: unknown }
+  | { type: 'models:response'; requestId: string; providers: ProviderInfo[] };
 
 /** Server -> Gateway messages */
 export type ServerToGatewayMessage =
@@ -63,7 +87,8 @@ export type ServerToGatewayMessage =
   | { type: 'ping' }
   | { type: 'task:execute'; task: TaskRequest }
   | { type: 'task:abort'; taskId: string }
-  | { type: 'task:input'; taskId: string; content: string };
+  | { type: 'task:input'; taskId: string; content: string }
+  | { type: 'models:request'; requestId: string };
 
 /** Gateway connection options */
 export interface GatewayOptions {

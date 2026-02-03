@@ -20,6 +20,7 @@ use crate::gateway::{GatewayManager, start_heartbeat_checker};
 use crate::socket::{create_socket_layer, SocketState};
 use crate::state::AppState;
 use vk_core::kanban::KanbanStore;
+use vk_core::task::FileTaskStore;
 
 #[tokio::main]
 async fn main() {
@@ -39,26 +40,38 @@ async fn main() {
 
     tracing::info!("Using data directory: {:?}", data_dir);
 
-// Create application state for REST API
-    let app_state = AppState::new(data_dir.clone())
+    // Create TaskStore first (needed by both GatewayManager, KanbanStore and AppState)
+    let tasks_path = data_dir.join("tasks.json");
+    let task_store = Arc::new(FileTaskStore::new(tasks_path).await
+        .expect("Failed to initialize task store"));
+
+    // Create KanbanStore synced with TaskStore
+    let kanban_path = data_dir.join("kanban.json");
+    let kanban_store = Arc::new(KanbanStore::with_task_store(kanban_path, Arc::clone(&task_store)).await
+        .expect("Failed to initialize kanban store"));
+
+    // Create Gateway Manager with TaskStore and KanbanStore for Agent Gateway connections
+    let gateway_manager = Arc::new(GatewayManager::with_stores(
+        Arc::clone(&task_store),
+        Arc::clone(&kanban_store),
+    ));
+    start_heartbeat_checker(Arc::clone(&gateway_manager));
+    tracing::info!("Gateway Manager initialized with TaskStore and KanbanStore");
+
+    // Create application state for REST API (uses shared stores)
+    let app_state = AppState::with_stores(
+        data_dir.clone(),
+        Arc::clone(&task_store),
+        Arc::clone(&kanban_store),
+        Arc::clone(&gateway_manager),
+    )
         .await
         .expect("Failed to initialize application state");
 
-    // Create Gateway Manager for Agent Gateway connections
-    let gateway_manager = Arc::new(GatewayManager::new());
-    start_heartbeat_checker(Arc::clone(&gateway_manager));
-    tracing::info!("Gateway Manager initialized");
-
-    // Create kanban store for Socket.IO - synced with TaskStore
-    let kanban_path = data_dir.join("kanban.json");
-    let kanban_store = KanbanStore::with_task_store(kanban_path, app_state.task_store_arc())
-        .await
-        .expect("Failed to initialize kanban store");
-
-    // Create Socket.IO layer
+    // Create Socket.IO layer with the shared KanbanStore
     let socket_state = SocketState::new(
-        Arc::new(kanban_store),
-        app_state.task_store_arc(),
+        Arc::clone(&kanban_store),
+        Arc::clone(&task_store),
         data_dir.clone(),
     );
     let (socket_layer, io) = create_socket_layer(socket_state);
@@ -71,8 +84,8 @@ async fn main() {
         .merge(routes::health::router())
         .merge(routes::task::router())
         .merge(routes::executor::router())
-        .with_state(app_state)
-        .merge(routes::gateway::router(Arc::clone(&gateway_manager)))
+        .with_state(app_state.clone())
+        .merge(routes::gateway::router(app_state.gateway_manager_arc()))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)

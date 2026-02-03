@@ -35,6 +35,10 @@ export interface SessionSummary {
 export interface StartExecutionRequest {
   agentType: AgentType;
   baseBranch: string;
+  /** Target host for remote execution (optional) */
+  targetHost?: string;
+  /** Model to use (format: provider/model) */
+  model?: string;
 }
 
 // API base URL
@@ -71,6 +75,15 @@ export function useTaskExecutor(): UseTaskExecutorResult {
     async (taskId: string, request: StartExecutionRequest): Promise<ExecutionResponse | null> => {
       setIsExecuting(true);
       setError(null);
+      
+      // Debug log
+      console.log('[useTaskExecutor] Starting execution:', {
+        taskId,
+        request,
+        targetHost: request.targetHost,
+        model: request.model,
+      });
+      
       try {
         const response = await fetch(`${baseUrl}/api/tasks/${taskId}/execute`, {
           method: 'POST',

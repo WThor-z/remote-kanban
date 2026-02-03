@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
-import { X, Play, Square, Send, Loader2, CheckCircle, XCircle, Clock, GitBranch, Trash2, MessageSquare, Terminal } from 'lucide-react';
-import type { KanbanTask, TaskSessionHistory, AgentSessionStatus, ChatMessage } from '@opencode-vibe/protocol';
+import { X, Play, Square, Send, Loader2, CheckCircle, XCircle, Clock, GitBranch, Trash2, MessageSquare, Terminal, History } from 'lucide-react';
+import type { KanbanTask, TaskSessionHistory, AgentSessionStatus } from '@opencode-vibe/protocol';
 import { ExecutionLogPanel } from '../execution/ExecutionLogPanel';
+import { RunHistoryPanel } from '../run/RunHistoryPanel';
+import { useTaskRuns, type ChatMessage } from '../../hooks/useTaskRuns';
 
 interface ExecutionInfo {
   sessionId: string;
@@ -50,10 +52,14 @@ export function TaskDetailPanel({
   onSendInput,
 }: TaskDetailPanelProps) {
   const [inputValue, setInputValue] = useState('');
-  const [activeTab, setActiveTab] = useState<'chat' | 'logs'>('chat');
+  const [activeTab, setActiveTab] = useState<'chat' | 'logs' | 'runs'>('chat');
+  const [persistedMessages, setPersistedMessages] = useState<ChatMessage[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const currentStatus = status || 'idle';
   const statusInfo = statusConfig[currentStatus];
+
+  // Load runs to get the most recent run's messages
+  const { runs, loadMessages } = useTaskRuns(task.id);
 
   // Auto-switch to logs when execution starts
   useEffect(() => {
@@ -62,12 +68,31 @@ export function TaskDetailPanel({
     }
   }, [status]);
 
+  // Load persisted messages from most recent run when no active session
+  useEffect(() => {
+    const loadPersistedMessages = async () => {
+      // Only load persisted messages if there's no active history and there are runs
+      if (!history?.messages?.length && runs.length > 0) {
+        const mostRecentRun = runs[0]; // runs are sorted by created_at descending
+        const messages = await loadMessages(mostRecentRun.id);
+        setPersistedMessages(messages);
+      } else {
+        setPersistedMessages([]);
+      }
+    };
+
+    void loadPersistedMessages();
+  }, [history?.messages?.length, runs, loadMessages]);
+
+  // Use active history messages or persisted messages
+  const displayMessages = history?.messages?.length ? history.messages : persistedMessages;
+
   // 自动滚动到底部
   useEffect(() => {
     if (activeTab === 'chat') {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [history?.messages, activeTab]);
+  }, [displayMessages, activeTab]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -124,6 +149,17 @@ export function TaskDetailPanel({
           >
             <Terminal size={16} />
             Logs
+          </button>
+          <button
+            onClick={() => setActiveTab('runs')}
+            className={`flex-1 px-4 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${
+              activeTab === 'runs'
+                ? 'text-indigo-400 border-b-2 border-indigo-400 bg-slate-800/50'
+                : 'text-slate-400 hover:text-slate-300 hover:bg-slate-800/30'
+            }`}
+          >
+            <History size={16} />
+            Runs
           </button>
         </div>
 
@@ -193,8 +229,8 @@ export function TaskDetailPanel({
             )}
 
             {/* Messages */}
-            {history?.messages.map((message) => (
-              <MessageBubble key={message.id} message={message} />
+            {displayMessages.map((message) => (
+              <MessageBubble key={message.id} message={message as any} />
             ))}
 
             {/* Error */}
@@ -214,6 +250,11 @@ export function TaskDetailPanel({
               onSendInput={onSendInput}
               isRunning={isRunning}
             />
+          </div>
+
+          {/* Runs View */}
+          <div className={`absolute inset-0 ${activeTab === 'runs' ? 'z-10' : 'z-0 hidden'}`}>
+            <RunHistoryPanel taskId={task.id} />
           </div>
         </div>
 
@@ -270,9 +311,10 @@ export function TaskDetailPanel({
 }
 
 // Message Bubble Component
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({ message }: { message: ChatMessage & { isStreaming?: boolean } }) {
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
+  const isStreaming = message.isStreaming;
 
   return (
     <div
@@ -288,7 +330,14 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         }`}
       >
         <div className="text-sm whitespace-pre-wrap break-words">
-          {message.content}
+          {isStreaming ? (
+            <span className="flex items-center gap-2">
+              <Loader2 size={14} className="animate-spin" />
+              {message.content}
+            </span>
+          ) : (
+            message.content
+          )}
         </div>
         <div className={`text-xs mt-1 ${isUser ? 'text-indigo-200' : 'text-slate-500'}`}>
           {new Date(message.timestamp).toLocaleTimeString()}

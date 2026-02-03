@@ -10,6 +10,9 @@ pub enum Error {
     #[error("Project not found: {0}")]
     ProjectNotFound(String),
 
+    #[error("Not found: {0}")]
+    NotFound(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 

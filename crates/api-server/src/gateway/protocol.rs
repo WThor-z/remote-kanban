@@ -44,6 +44,13 @@ pub enum GatewayAgentEventType {
     FileChange,
     Message,
     Error,
+    Stdout,
+    Stderr,
+    Output,
+    /// Task completed successfully (synthetic event for internal use)
+    Completed,
+    /// Task failed (synthetic event for internal use)
+    Failed,
 }
 
 /// Gateway agent event - emitted during task execution
@@ -113,6 +120,12 @@ pub enum GatewayToServerMessage {
         #[serde(default)]
         details: serde_json::Value,
     },
+    #[serde(rename = "models:response")]
+    ModelsResponse {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        providers: Vec<ProviderInfo>,
+    },
 }
 
 /// Server -> Gateway messages
@@ -140,6 +153,11 @@ pub enum ServerToGatewayMessage {
         task_id: String,
         content: String,
     },
+    #[serde(rename = "models:request")]
+    ModelsRequest {
+        #[serde(rename = "requestId")]
+        request_id: String,
+    },
 }
 
 /// Host status - used for API responses
@@ -162,6 +180,36 @@ pub enum HostConnectionStatus {
     Online,
     Offline,
     Busy,
+}
+
+/// Model information from OpenCode
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelInfo {
+    pub id: String,
+    pub provider_id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<ModelCapabilities>,
+}
+
+/// Model capabilities
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCapabilities {
+    pub temperature: bool,
+    pub reasoning: bool,
+    pub attachment: bool,
+    pub toolcall: bool,
+}
+
+/// Provider information from OpenCode
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderInfo {
+    pub id: String,
+    pub name: String,
+    pub models: Vec<ModelInfo>,
 }
 
 #[cfg(test)]

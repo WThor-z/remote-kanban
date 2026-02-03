@@ -31,14 +31,18 @@ const connection = new GatewayConnection({
   reconnect: true,
 });
 
-// Create executor
+// Create executor (using SDK instead of CLI)
 const executor = new TaskExecutor({
   defaultCwd: config.capabilities.cwd,
   defaultAgent: 'opencode',
+  serverPort: parseInt(process.env.OPENCODE_PORT || '0'), // 0 = 随机端口
 });
 
 // Forward executor events to server
 executor.on('event', ({ taskId, event }) => {
+  // Log locally for debugging
+  console.log(`[executor] ${event.type}: ${event.content?.substring(0, 200) || ''}`);
+  
   connection.send({
     type: 'task:event',
     taskId,
@@ -58,11 +62,18 @@ connection.on('message', async (msg: ServerToGatewayMessage) => {
     case 'task:input':
       handleTaskInput(msg.taskId, msg.content);
       break;
+    case 'models:request':
+      await handleModelsRequest(msg.requestId);
+      break;
   }
 });
 
 async function handleTaskExecute(task: TaskRequest): Promise<void> {
   console.log(`[Gateway] Executing task ${task.taskId}`);
+  console.log(`[Gateway] Prompt: ${task.prompt}`);
+  console.log(`[Gateway] CWD: ${task.cwd}`);
+  console.log(`[Gateway] Agent: ${task.agentType}`);
+  console.log(`[Gateway] Model: ${task.model || '(not specified)'}`);
   
   connection.send({
     type: 'task:started',
@@ -72,6 +83,7 @@ async function handleTaskExecute(task: TaskRequest): Promise<void> {
 
   try {
     const result = await executor.execute(task);
+    console.log(`[Gateway] Task ${task.taskId} completed with exit code: ${result.exitCode}`);
     
     connection.send({
       type: 'task:completed',
@@ -79,6 +91,7 @@ async function handleTaskExecute(task: TaskRequest): Promise<void> {
       result,
     });
   } catch (err) {
+    console.error(`[Gateway] Task ${task.taskId} failed:`, err);
     connection.send({
       type: 'task:failed',
       taskId: task.taskId,
@@ -100,8 +113,32 @@ function handleTaskInput(taskId: string, content: string): void {
   executor.sendInput(taskId, content);
 }
 
+async function handleModelsRequest(requestId: string): Promise<void> {
+  console.log(`[Gateway] Fetching models for request ${requestId}`);
+  try {
+    const providers = await executor.getAvailableModels();
+    console.log(`[Gateway] Got ${providers.length} providers with models:`, 
+      providers.map(p => `${p.name}(${p.models.length})`).join(', '));
+    connection.send({
+      type: 'models:response',
+      requestId,
+      providers,
+    });
+    console.log(`[Gateway] Sent ${providers.length} providers for request ${requestId}`);
+  } catch (err) {
+    console.error(`[Gateway] Failed to fetch models:`, err);
+    // Send error message to help with debugging
+    console.error(`[Gateway] Error details:`, err instanceof Error ? err.stack : String(err));
+    connection.send({
+      type: 'models:response',
+      requestId,
+      providers: [],
+    });
+  }
+}
+
 // Startup
-console.log('[Gateway] Starting Agent Gateway...');
+console.log('[Gateway] Starting Agent Gateway (SDK mode)...');
 console.log(`[Gateway] Server: ${config.serverUrl}`);
 console.log(`[Gateway] Host ID: ${config.hostId}`);
 console.log(`[Gateway] Capabilities:`, config.capabilities);
@@ -111,14 +148,16 @@ connection.connect().catch((err) => {
 });
 
 // Graceful shutdown
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
   console.log('[Gateway] Shutting down...');
+  await executor.shutdown();
   connection.disconnect();
   process.exit(0);
 });
 
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   console.log('[Gateway] Shutting down...');
+  await executor.shutdown();
   connection.disconnect();
   process.exit(0);
 });

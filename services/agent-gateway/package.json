@@ -10,6 +10,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@opencode-ai/sdk": "^1.1.48",
     "ws": "^8.16.0",
     "zod": "^3.22.4"
   },

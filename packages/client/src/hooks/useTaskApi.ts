@@ -21,6 +21,7 @@ export interface Task {
   priority: TaskPriority;
   agentType: AgentType | null;
   baseBranch: string | null;
+  model: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -31,6 +32,10 @@ export interface CreateTaskRequest {
   priority?: TaskPriority;
   agentType?: AgentType;
   baseBranch?: string;
+  /** Target host for execution (undefined = auto select) */
+  targetHost?: string;
+  /** Model to use for execution (format: provider/model) */
+  model?: string;
 }
 
 export interface UpdateTaskRequest {

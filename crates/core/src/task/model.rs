@@ -45,6 +45,7 @@ pub struct Task {
     pub priority: TaskPriority,
     pub agent_type: Option<String>,
     pub base_branch: Option<String>,
+    pub model: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -61,6 +62,7 @@ impl Task {
             priority: TaskPriority::default(),
             agent_type: Some("opencode".to_string()),
             base_branch: Some("main".to_string()),
+            model: None,
             created_at: now,
             updated_at: now,
         }
@@ -87,6 +89,12 @@ impl Task {
     /// Set the base branch
     pub fn with_base_branch(mut self, base_branch: impl Into<String>) -> Self {
         self.base_branch = Some(base_branch.into());
+        self
+    }
+
+    /// Set the model
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
         self
     }
 }

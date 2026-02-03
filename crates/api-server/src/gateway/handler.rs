@@ -169,6 +169,13 @@ async fn handle_gateway_message(
         } => {
             manager.handle_task_failed(host_id, &task_id, &error).await;
         }
+
+        GatewayToServerMessage::ModelsResponse {
+            request_id,
+            providers,
+        } => {
+            manager.handle_models_response(&request_id, providers).await;
+        }
     }
 }
 
@@ -191,4 +198,22 @@ pub async fn list_hosts_handler(
 ) -> impl IntoResponse {
     let hosts = manager.list_hosts().await;
     axum::Json(hosts)
+}
+
+/// Get available models from a specific gateway host
+pub async fn get_host_models_handler(
+    State(manager): State<Arc<GatewayManager>>,
+    axum::extract::Path(host_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    match manager.request_models(&host_id).await {
+        Ok(providers) => (axum::http::StatusCode::OK, axum::Json(providers)).into_response(),
+        Err(e) => {
+            warn!("Failed to get models from host {}: {}", host_id, e);
+            (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(serde_json::json!({ "error": e })),
+            )
+                .into_response()
+        }
+    }
 }

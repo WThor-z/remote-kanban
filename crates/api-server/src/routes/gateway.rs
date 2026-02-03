@@ -3,12 +3,15 @@
 use axum::{routing::get, Router};
 use std::sync::Arc;
 
-use crate::gateway::{gateway_ws_handler, list_hosts_handler, GatewayManager};
+use crate::gateway::{
+    gateway_ws_handler, get_host_models_handler, list_hosts_handler, GatewayManager,
+};
 
 /// Create router for gateway endpoints
 pub fn router(manager: Arc<GatewayManager>) -> Router<()> {
     Router::new()
         .route("/agent/ws", get(gateway_ws_handler))
         .route("/api/hosts", get(list_hosts_handler))
+        .route("/api/hosts/{host_id}/models", get(get_host_models_handler))
         .with_state(manager)
 }

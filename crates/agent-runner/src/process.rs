@@ -6,12 +6,15 @@ use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::{ExecutorError, Result};
 use crate::event::{AgentEvent, OutputStream};
 use crate::parser::create_parser;
 
 /// Supported agent types
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AgentType {
     OpenCode,
     ClaudeCode,
@@ -30,6 +33,16 @@ impl AgentType {
             _ => Err(ExecutorError::InvalidAgentType {
                 agent_type: s.to_string(),
             }),
+        }
+    }
+
+    /// Get the canonical string representation
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::OpenCode => "opencode",
+            Self::ClaudeCode => "claude-code",
+            Self::GeminiCli => "gemini-cli",
+            Self::Codex => "codex",
         }
     }
 

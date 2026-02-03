@@ -3,10 +3,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
 use tracing::{debug, error, info, warn};
 
 use super::protocol::*;
+use vk_core::kanban::{KanbanStore, KanbanTaskStatus};
+use vk_core::task::{FileTaskStore, TaskRepository, TaskStatus};
 
 /// Host connection state
 pub struct HostConnection {
@@ -27,7 +29,7 @@ impl HostConnection {
 }
 
 /// Task event for broadcasting (includes host info)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct BroadcastTaskEvent {
     pub task_id: String,
     pub host_id: String,
@@ -38,6 +40,12 @@ pub struct BroadcastTaskEvent {
 pub struct GatewayManager {
     connections: Arc<RwLock<HashMap<String, HostConnection>>>,
     event_tx: broadcast::Sender<BroadcastTaskEvent>,
+    /// Pending model requests - maps request_id to response sender
+    pending_model_requests: Arc<RwLock<HashMap<String, oneshot::Sender<Vec<ProviderInfo>>>>>,
+    /// Task store for updating task status
+    task_store: Option<Arc<FileTaskStore>>,
+    /// Kanban store for updating kanban board
+    kanban_store: Option<Arc<KanbanStore>>,
 }
 
 impl GatewayManager {
@@ -47,7 +55,46 @@ impl GatewayManager {
         Self {
             connections: Arc::new(RwLock::new(HashMap::new())),
             event_tx,
+            pending_model_requests: Arc::new(RwLock::new(HashMap::new())),
+            task_store: None,
+            kanban_store: None,
         }
+    }
+
+    /// Create a new Gateway Manager with a task store
+    pub fn with_task_store(task_store: Arc<FileTaskStore>) -> Self {
+        let (event_tx, _) = broadcast::channel(1000);
+        Self {
+            connections: Arc::new(RwLock::new(HashMap::new())),
+            event_tx,
+            pending_model_requests: Arc::new(RwLock::new(HashMap::new())),
+            task_store: Some(task_store),
+            kanban_store: None,
+        }
+    }
+
+    /// Create a new Gateway Manager with both task store and kanban store
+    pub fn with_stores(task_store: Arc<FileTaskStore>, kanban_store: Arc<KanbanStore>) -> Self {
+        let (event_tx, _) = broadcast::channel(1000);
+        Self {
+            connections: Arc::new(RwLock::new(HashMap::new())),
+            event_tx,
+            pending_model_requests: Arc::new(RwLock::new(HashMap::new())),
+            task_store: Some(task_store),
+            kanban_store: Some(kanban_store),
+        }
+    }
+
+    /// Set the task store (for use after construction)
+    #[allow(dead_code)]
+    pub fn set_task_store(&mut self, task_store: Arc<FileTaskStore>) {
+        self.task_store = Some(task_store);
+    }
+
+    /// Set the kanban store (for use after construction)
+    #[allow(dead_code)]
+    pub fn set_kanban_store(&mut self, kanban_store: Arc<KanbanStore>) {
+        self.kanban_store = Some(kanban_store);
     }
 
     /// Subscribe to task events (for forwarding to frontend)
@@ -152,12 +199,60 @@ impl GatewayManager {
         if let Some(conn) = connections.get_mut(host_id) {
             conn.active_tasks.retain(|id| id != task_id);
         }
+        drop(connections); // Release lock before async task store operations
 
         info!(
             "Task {} completed on host {}: success={}",
             task_id, host_id, result.success
         );
-        // TODO: Update task in database
+        
+        // Update task status in TaskStore
+        if let Some(task_store) = &self.task_store {
+            if let Ok(task_uuid) = uuid::Uuid::parse_str(task_id) {
+                match task_store.get(task_uuid).await {
+                    Ok(Some(mut task)) => {
+                        task.status = TaskStatus::Done;
+                        if let Err(e) = task_store.update(task).await {
+                            warn!("Failed to update task {} status to Done: {}", task_id, e);
+                        } else {
+                            info!("Task {} status updated to Done", task_id);
+                        }
+                    }
+                    Ok(None) => {
+                        warn!("Task {} not found in task store", task_id);
+                    }
+                    Err(e) => {
+                        warn!("Failed to get task {} from store: {}", task_id, e);
+                    }
+                }
+            }
+        }
+        
+        // Update KanbanStore (this is what the UI actually reads)
+        if let Some(kanban_store) = &self.kanban_store {
+            if let Err(e) = kanban_store.move_task(task_id, KanbanTaskStatus::Done, None).await {
+                warn!("Failed to move kanban task {} to Done: {}", task_id, e);
+            } else {
+                info!("Kanban task {} moved to Done", task_id);
+            }
+        }
+        
+        // Broadcast a synthetic "Completed" event so the event forwarder in executor.rs
+        // can detect task completion and emit kanban:sync
+        let completed_event = GatewayAgentEvent {
+            event_type: GatewayAgentEventType::Completed,
+            content: Some(format!("Task completed: success={}", result.success)),
+            data: serde_json::json!({ "result": result }),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        };
+        let _ = self.event_tx.send(BroadcastTaskEvent {
+            task_id: task_id.to_string(),
+            host_id: host_id.to_string(),
+            event: completed_event,
+        });
     }
 
     /// Handle task failed event from gateway
@@ -166,12 +261,62 @@ impl GatewayManager {
         if let Some(conn) = connections.get_mut(host_id) {
             conn.active_tasks.retain(|id| id != task_id);
         }
+        drop(connections); // Release lock before async task store operations
 
         error!("Task {} failed on host {}: {}", task_id, host_id, error);
-        // TODO: Update task in database
+        
+        // Update task status in TaskStore (mark as Todo so user can retry)
+        if let Some(task_store) = &self.task_store {
+            if let Ok(task_uuid) = uuid::Uuid::parse_str(task_id) {
+                match task_store.get(task_uuid).await {
+                    Ok(Some(mut task)) => {
+                        // Move back to Todo on failure so user can retry
+                        task.status = TaskStatus::Todo;
+                        if let Err(e) = task_store.update(task).await {
+                            warn!("Failed to update task {} status to Todo: {}", task_id, e);
+                        } else {
+                            info!("Task {} status updated to Todo (failed)", task_id);
+                        }
+                    }
+                    Ok(None) => {
+                        warn!("Task {} not found in task store", task_id);
+                    }
+                    Err(e) => {
+                        warn!("Failed to get task {} from store: {}", task_id, e);
+                    }
+                }
+            }
+        }
+        
+        // Update KanbanStore - move back to Todo on failure
+        if let Some(kanban_store) = &self.kanban_store {
+            if let Err(e) = kanban_store.move_task(task_id, KanbanTaskStatus::Todo, None).await {
+                warn!("Failed to move kanban task {} to Todo: {}", task_id, e);
+            } else {
+                info!("Kanban task {} moved to Todo (failed)", task_id);
+            }
+        }
+        
+        // Broadcast a synthetic "Failed" event so the event forwarder in executor.rs
+        // can detect task failure and emit kanban:sync
+        let failed_event = GatewayAgentEvent {
+            event_type: GatewayAgentEventType::Failed,
+            content: Some(format!("Task failed: {}", error)),
+            data: serde_json::json!({ "error": error }),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        };
+        let _ = self.event_tx.send(BroadcastTaskEvent {
+            task_id: task_id.to_string(),
+            host_id: host_id.to_string(),
+            event: failed_event,
+        });
     }
 
     /// Abort a running task
+    #[allow(dead_code)]
     pub async fn abort_task(&self, task_id: &str) -> Result<(), String> {
         let connections = self.connections.read().await;
 
@@ -192,6 +337,7 @@ impl GatewayManager {
     }
 
     /// Send input to a running task
+    #[allow(dead_code)]
     pub async fn send_input(&self, task_id: &str, content: String) -> Result<(), String> {
         let connections = self.connections.read().await;
 
@@ -210,6 +356,66 @@ impl GatewayManager {
         }
 
         Err(format!("Task {} not found on any host", task_id))
+    }
+
+    /// Request available models from a specific gateway host
+    pub async fn request_models(&self, host_id: &str) -> Result<Vec<ProviderInfo>, String> {
+        let connections = self.connections.read().await;
+        
+        let conn = connections
+            .get(host_id)
+            .ok_or_else(|| format!("Host {} not found", host_id))?;
+
+        // Create a request ID and oneshot channel for the response
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let (tx, rx) = oneshot::channel();
+
+        // Store the pending request
+        {
+            let mut pending = self.pending_model_requests.write().await;
+            pending.insert(request_id.clone(), tx);
+        }
+
+        // Send the request to the gateway
+        conn.tx
+            .send(ServerToGatewayMessage::ModelsRequest { request_id: request_id.clone() })
+            .await
+            .map_err(|e| {
+                // Clean up pending request on send failure
+                let pending = self.pending_model_requests.clone();
+                let req_id = request_id.clone();
+                tokio::spawn(async move {
+                    pending.write().await.remove(&req_id);
+                });
+                format!("Failed to send models request: {}", e)
+            })?;
+
+        drop(connections); // Release the read lock before waiting
+
+        // Wait for response with timeout
+        match tokio::time::timeout(Duration::from_secs(30), rx).await {
+            Ok(Ok(providers)) => Ok(providers),
+            Ok(Err(_)) => {
+                // Channel closed without response
+                Err("Models request was cancelled".to_string())
+            }
+            Err(_) => {
+                // Timeout - clean up pending request
+                self.pending_model_requests.write().await.remove(&request_id);
+                Err("Models request timed out".to_string())
+            }
+        }
+    }
+
+    /// Handle models response from gateway
+    pub async fn handle_models_response(&self, request_id: &str, providers: Vec<ProviderInfo>) {
+        let mut pending = self.pending_model_requests.write().await;
+        if let Some(tx) = pending.remove(request_id) {
+            let _ = tx.send(providers);
+            debug!("Delivered models response for request {}", request_id);
+        } else {
+            warn!("Received models response for unknown request {}", request_id);
+        }
     }
 
     /// List all connected hosts
@@ -255,6 +461,7 @@ impl GatewayManager {
     }
 
     /// Get the number of connected hosts
+    #[allow(dead_code)]
     pub async fn host_count(&self) -> usize {
         self.connections.read().await.len()
     }

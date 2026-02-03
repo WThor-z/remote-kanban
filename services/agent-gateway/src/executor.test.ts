@@ -1,90 +1,120 @@
-import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { GatewayAgentEvent } from './types.js';
 import { EventEmitter } from 'events';
-import { TaskExecutor } from './executor.js';
-import type { TaskRequest, GatewayAgentEvent } from './types.js';
 
-// Mock child_process spawn
-vi.mock('child_process', () => {
-  return {
-    spawn: vi.fn(),
+// Create mock functions that will be shared - use vi.hoisted for proper hoisting
+const { mockSession, mockEvent, mockClient, mockCreateOpencodeClient, mockSpawn } = vi.hoisted(() => {
+  const mockSession = {
+    create: vi.fn(),
+    prompt: vi.fn(),
+    messages: vi.fn(),
+    abort: vi.fn(),
+    list: vi.fn(),
   };
+
+  const mockEvent = {
+    subscribe: vi.fn(),
+  };
+
+  const mockClient = {
+    session: mockSession,
+    event: mockEvent,
+  };
+
+  const mockCreateOpencodeClient = vi.fn().mockReturnValue(mockClient);
+  const mockSpawn = vi.fn();
+
+  return { mockSession, mockEvent, mockClient, mockCreateOpencodeClient, mockSpawn };
 });
 
-import { spawn } from 'child_process';
+// Mock the SDK
+vi.mock('@opencode-ai/sdk', () => ({
+  createOpencodeClient: mockCreateOpencodeClient,
+}));
 
-// Helper to create a mock child process
-function createMockChildProcess(options: {
-  exitCode?: number;
-  stdout?: string;
-  stderr?: string;
-  exitDelay?: number;
-  noExitOnKill?: boolean;
-} = {}) {
-  const { exitCode = 0, stdout = '', stderr = '', exitDelay = 10, noExitOnKill = false } = options;
-  
-  const mockProcess = new EventEmitter() as any;
-  mockProcess.stdout = new EventEmitter();
-  mockProcess.stderr = new EventEmitter();
-  mockProcess.stdin = {
-    write: vi.fn(),
-    end: vi.fn(),
-  };
-  mockProcess.killed = false;
-  mockProcess.kill = vi.fn(() => {
-    mockProcess.killed = true;
-    // Only emit exit if noExitOnKill is false
-    if (!noExitOnKill) {
-      mockProcess.emit('exit', null);
-    }
+// Mock child_process
+vi.mock('child_process', () => ({
+  spawn: mockSpawn,
+}));
+
+import { TaskExecutor } from './executor.js';
+
+// Create the mock server process outside of vi.hoisted (EventEmitter can't be hoisted)
+let mockServerProcess: EventEmitter & {
+  stdout: EventEmitter;
+  stderr: EventEmitter;
+  stdin: null;
+  pid: number;
+  kill: ReturnType<typeof vi.fn>;
+  killed: boolean;
+};
+
+function createMockServerProcess() {
+  const proc = Object.assign(new EventEmitter(), {
+    stdout: new EventEmitter(),
+    stderr: new EventEmitter(),
+    stdin: null as null,
+    pid: 12345,
+    kill: vi.fn(),
+    killed: false,
   });
-
-  // Simulate async execution
-  setTimeout(() => {
-    if (stdout) {
-      mockProcess.stdout.emit('data', Buffer.from(stdout));
-    }
-    if (stderr) {
-      mockProcess.stderr.emit('data', Buffer.from(stderr));
-    }
-    setTimeout(() => {
-      // Don't emit exit if already killed
-      if (!mockProcess.killed) {
-        mockProcess.emit('exit', exitCode);
-      }
-    }, exitDelay);
-  }, 1);
-
-  return mockProcess;
+  return proc;
 }
 
-describe('TaskExecutor', () => {
+describe('TaskExecutor (SDK Mode)', () => {
   let executor: TaskExecutor;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    
+    // Create fresh mock server process for each test
+    mockServerProcess = createMockServerProcess();
+    mockSpawn.mockReturnValue(mockServerProcess);
+    
+    // Reset mocks with default successful behavior
+    mockSession.list.mockResolvedValue({
+      data: [],
+    });
+    mockSession.create.mockResolvedValue({
+      data: { id: 'session-123', title: 'Test Session' },
+    });
+    mockSession.prompt.mockResolvedValue({
+      data: { info: { id: 'msg-1' }, parts: [{ type: 'text', text: 'Hello!' }] },
+    });
+    mockSession.messages.mockResolvedValue({
+      data: [{ parts: [{ type: 'text', text: 'Response' }] }],
+    });
+    mockSession.abort.mockResolvedValue({ data: true });
+    mockEvent.subscribe.mockResolvedValue({
+      stream: (async function* () {})(),
+    });
+    
     executor = new TaskExecutor({
       defaultCwd: process.cwd(),
       defaultAgent: 'opencode',
     });
   });
 
-  afterEach(() => {
-    // Abort any running tasks
-    for (const taskId of executor.activeTaskIds) {
-      executor.abort(taskId);
-    }
-    vi.restoreAllMocks();
+  afterEach(async () => {
+    await executor.shutdown();
   });
+
+  // Helper to simulate server startup
+  const simulateServerStart = (url = 'http://127.0.0.1:4096') => {
+    // Simulate server starting and outputting URL
+    setTimeout(() => {
+      mockServerProcess.stdout.emit('data', `opencode server listening on ${url}\n`);
+    }, 10);
+  };
 
   describe('execute', () => {
     it('should emit events during execution', async () => {
-      const mockChild = createMockChildProcess({ stdout: 'hello world\n', exitCode: 0 });
-      (spawn as Mock).mockReturnValue(mockChild);
-
+      simulateServerStart();
+      
       const events: Array<{ taskId: string; event: GatewayAgentEvent }> = [];
       executor.on('event', (e) => events.push(e));
 
-      await executor.execute({
+      const result = await executor.execute({
         taskId: 'test-1',
         prompt: 'test prompt',
         cwd: process.cwd(),
@@ -92,58 +122,15 @@ describe('TaskExecutor', () => {
         timeout: 5000,
       });
 
-      // Executor should have emitted events
+      // Should have emitted events
       expect(events.length).toBeGreaterThan(0);
       expect(events[0].taskId).toBe('test-1');
-      
-      // First event should be the executor startup log
-      expect(events[0].event.type).toBe('log');
-      expect(events[0].event.content).toContain('[executor]');
+      expect(result.success).toBe(true);
     });
 
-    it('should track active tasks', async () => {
-      expect(executor.activeTaskCount).toBe(0);
+    it('should return success for successful execution', async () => {
+      simulateServerStart();
       
-      // Create a long-running mock process
-      const mockChild = createMockChildProcess({ exitDelay: 5000 });
-      (spawn as Mock).mockReturnValue(mockChild);
-
-      const promise = executor.execute({
-        taskId: 'long-task',
-        prompt: 'long running',
-        cwd: process.cwd(),
-        agentType: 'opencode',
-        timeout: 30000,
-      });
-
-      // Give it time to start
-      await new Promise((r) => setTimeout(r, 50));
-      
-      expect(executor.activeTaskCount).toBe(1);
-      expect(executor.activeTaskIds).toContain('long-task');
-      
-      // Abort it
-      executor.abort('long-task');
-      
-      await new Promise((r) => setTimeout(r, 50));
-      
-      expect(executor.activeTaskCount).toBe(0);
-      
-      // Wait for promise to settle
-      try {
-        await promise;
-      } catch {
-        // Expected to fail due to abort
-      }
-    });
-
-    it('should return success for successful command', async () => {
-      const mockChild = createMockChildProcess({ 
-        stdout: 'success output\n', 
-        exitCode: 0 
-      });
-      (spawn as Mock).mockReturnValue(mockChild);
-
       const result = await executor.execute({
         taskId: 'success-test',
         prompt: 'test prompt',
@@ -153,162 +140,113 @@ describe('TaskExecutor', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.exitCode).toBe(0);
+      expect(result.duration).toBeDefined();
+      expect(mockSession.create).toHaveBeenCalled();
+      expect(mockSession.prompt).toHaveBeenCalled();
     });
 
-    it('should return failure for failing command', async () => {
-      const mockChild = createMockChildProcess({ exitCode: 1 });
-      (spawn as Mock).mockReturnValue(mockChild);
+    it('should return failure when session creation fails', async () => {
+      simulateServerStart();
+      mockSession.create.mockResolvedValue({ data: null });
+
+      const events: Array<{ taskId: string; event: GatewayAgentEvent }> = [];
+      executor.on('event', (e) => events.push(e));
 
       const result = await executor.execute({
         taskId: 'fail-test',
-        prompt: 'failing command',
+        prompt: 'test prompt',
         cwd: process.cwd(),
         agentType: 'opencode',
         timeout: 5000,
       });
 
       expect(result.success).toBe(false);
-      expect(result.exitCode).toBe(1);
+      expect(result.output).toContain('Failed to create session');
     });
 
-    it('should emit error events for stderr output', async () => {
-      const mockChild = createMockChildProcess({ 
-        stderr: 'error output\n', 
-        exitCode: 1 
-      });
-      (spawn as Mock).mockReturnValue(mockChild);
-
-      const events: Array<{ taskId: string; event: GatewayAgentEvent }> = [];
-      executor.on('event', (e) => events.push(e));
-
+    it('should parse model string correctly', async () => {
+      simulateServerStart();
+      
       await executor.execute({
-        taskId: 'stderr-test',
-        prompt: 'test prompt',
-        cwd: process.cwd(),
-        agentType: 'opencode',
-        timeout: 5000,
-      });
-
-      const errorEvent = events.find(e => e.event.type === 'error');
-      expect(errorEvent).toBeDefined();
-      expect(errorEvent?.event.content).toContain('error output');
-    });
-
-    it('should parse JSON output events', async () => {
-      const jsonEvent = JSON.stringify({ type: 'message', content: 'Hello from agent' });
-      const mockChild = createMockChildProcess({ 
-        stdout: jsonEvent + '\n', 
-        exitCode: 0 
-      });
-      (spawn as Mock).mockReturnValue(mockChild);
-
-      const events: Array<{ taskId: string; event: GatewayAgentEvent }> = [];
-      executor.on('event', (e) => events.push(e));
-
-      await executor.execute({
-        taskId: 'json-test',
-        prompt: 'test prompt',
-        cwd: process.cwd(),
-        agentType: 'opencode',
-        timeout: 5000,
-      });
-
-      const messageEvent = events.find(e => e.event.type === 'message');
-      expect(messageEvent).toBeDefined();
-    });
-
-    it('should use correct command for different agent types', async () => {
-      const mockChild = createMockChildProcess({ exitCode: 0 });
-      (spawn as Mock).mockReturnValue(mockChild);
-
-      await executor.execute({
-        taskId: 'agent-type-test',
-        prompt: 'test prompt',
-        cwd: process.cwd(),
-        agentType: 'claude-code',
-        timeout: 5000,
-      });
-
-      expect(spawn).toHaveBeenCalledWith(
-        process.platform === 'win32' ? 'claude.cmd' : 'claude',
-        expect.arrayContaining(['test prompt']),
-        expect.any(Object)
-      );
-    });
-
-    it('should handle timeout', async () => {
-      // Use noExitOnKill so timeout rejection happens before exit event
-      const mockChild = createMockChildProcess({ exitDelay: 10000, noExitOnKill: true });
-      (spawn as Mock).mockReturnValue(mockChild);
-
-      await expect(
-        executor.execute({
-          taskId: 'timeout-test',
-          prompt: 'test',
-          cwd: process.cwd(),
-          agentType: 'opencode',
-          timeout: 50,
-        })
-      ).rejects.toThrow('timeout');
-    });
-
-    it('should pass environment variables', async () => {
-      const mockChild = createMockChildProcess({ exitCode: 0 });
-      (spawn as Mock).mockReturnValue(mockChild);
-
-      await executor.execute({
-        taskId: 'env-test',
+        taskId: 'model-test',
         prompt: 'test',
         cwd: process.cwd(),
         agentType: 'opencode',
-        env: { CUSTOM_VAR: 'custom_value' },
+        model: 'anthropic/claude-3-sonnet',
         timeout: 5000,
       });
 
-      expect(spawn).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(Array),
+      // Verify prompt was called with parsed model
+      expect(mockSession.prompt).toHaveBeenCalledWith(
         expect.objectContaining({
-          env: expect.objectContaining({
-            CUSTOM_VAR: 'custom_value',
-            CI: '1',
-            NO_COLOR: '1',
+          body: expect.objectContaining({
+            model: { providerID: 'anthropic', modelID: 'claude-3-sonnet' },
           }),
         })
       );
     });
+    
+    it('should handle complex model strings with slashes', async () => {
+      simulateServerStart();
+      
+      await executor.execute({
+        taskId: 'model-test-2',
+        prompt: 'test',
+        cwd: process.cwd(),
+        agentType: 'opencode',
+        model: 'google/gemini-2.0-flash-preview',
+        timeout: 5000,
+      });
+
+      expect(mockSession.prompt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            model: { providerID: 'google', modelID: 'gemini-2.0-flash-preview' },
+          }),
+        })
+      );
+    });
+
+    it('should spawn opencode serve command', async () => {
+      simulateServerStart();
+      
+      await executor.execute({
+        taskId: 'spawn-test',
+        prompt: 'test',
+        cwd: process.cwd(),
+        agentType: 'opencode',
+        timeout: 5000,
+      });
+
+      // Check spawn was called with correct arguments
+      expect(mockSpawn).toHaveBeenCalledWith(
+        expect.stringMatching(/opencode(\.cmd)?/),
+        ['serve', '--hostname=127.0.0.1', '--port=0'],
+        expect.objectContaining({
+          cwd: process.cwd(),
+        })
+      );
+    });
+
+    it('should connect client with server URL', async () => {
+      simulateServerStart('http://127.0.0.1:9999');
+      
+      await executor.execute({
+        taskId: 'client-test',
+        prompt: 'test',
+        cwd: process.cwd(),
+        agentType: 'opencode',
+        timeout: 5000,
+      });
+
+      // Check client was created with correct URL
+      expect(mockCreateOpencodeClient).toHaveBeenCalledWith({
+        baseUrl: 'http://127.0.0.1:9999',
+      });
+    });
   });
 
   describe('abort', () => {
-    it('should abort running task', async () => {
-      const mockChild = createMockChildProcess({ exitDelay: 5000 });
-      (spawn as Mock).mockReturnValue(mockChild);
-
-      const promise = executor.execute({
-        taskId: 'abort-test',
-        prompt: 'long running',
-        cwd: process.cwd(),
-        agentType: 'opencode',
-      });
-
-      await new Promise((r) => setTimeout(r, 50));
-      
-      const aborted = executor.abort('abort-test');
-      expect(aborted).toBe(true);
-      expect(mockChild.kill).toHaveBeenCalled();
-      
-      // Should no longer be active
-      await new Promise((r) => setTimeout(r, 50));
-      expect(executor.activeTaskIds).not.toContain('abort-test');
-      
-      try {
-        await promise;
-      } catch {
-        // Expected
-      }
-    });
-
     it('should return false for non-existent task', () => {
       const aborted = executor.abort('non-existent');
       expect(aborted).toBe(false);
@@ -316,135 +254,37 @@ describe('TaskExecutor', () => {
   });
 
   describe('sendInput', () => {
-    it('should write to stdin of running task', async () => {
-      const mockChild = createMockChildProcess({ exitDelay: 5000 });
-      (spawn as Mock).mockReturnValue(mockChild);
-
-      const promise = executor.execute({
-        taskId: 'input-test',
-        prompt: 'interactive',
-        cwd: process.cwd(),
-        agentType: 'opencode',
-      });
-
-      await new Promise((r) => setTimeout(r, 50));
-
-      const sent = executor.sendInput('input-test', 'user input');
-      expect(sent).toBe(true);
-      expect(mockChild.stdin.write).toHaveBeenCalledWith('user input\n');
-
-      executor.abort('input-test');
-      try { await promise; } catch { /* expected */ }
-    });
-
-    it('should return false for non-existent task', () => {
-      const sent = executor.sendInput('non-existent', 'input');
+    it('should return false (not supported in SDK mode)', () => {
+      const sent = executor.sendInput('any-task', 'input');
       expect(sent).toBe(false);
     });
   });
 
   describe('activeTaskCount', () => {
-    it('should return correct count', async () => {
+    it('should return 0 initially', () => {
       expect(executor.activeTaskCount).toBe(0);
-      
-      const mockChild1 = createMockChildProcess({ exitDelay: 5000 });
-      const mockChild2 = createMockChildProcess({ exitDelay: 5000 });
-      (spawn as Mock)
-        .mockReturnValueOnce(mockChild1)
-        .mockReturnValueOnce(mockChild2);
+    });
 
-      const p1 = executor.execute({
-        taskId: 'task-1',
-        prompt: 'task 1',
-        cwd: process.cwd(),
-        agentType: 'opencode',
-      });
-      
-      const p2 = executor.execute({
-        taskId: 'task-2',
-        prompt: 'task 2',
-        cwd: process.cwd(),
-        agentType: 'opencode',
-      });
-
-      await new Promise((r) => setTimeout(r, 50));
-      
-      expect(executor.activeTaskCount).toBe(2);
-      expect(executor.activeTaskIds).toContain('task-1');
-      expect(executor.activeTaskIds).toContain('task-2');
-      
-      // Abort both
-      executor.abort('task-1');
-      executor.abort('task-2');
-      
-      try { await p1; } catch { /* expected */ }
-      try { await p2; } catch { /* expected */ }
+    it('should return 0 when no tasks running', () => {
+      expect(executor.activeTaskIds).toEqual([]);
     });
   });
 
-  describe('resolveCommand', () => {
-    it('should emit log event with command info', async () => {
-      const mockChild = createMockChildProcess({ exitCode: 0 });
-      (spawn as Mock).mockReturnValue(mockChild);
-
-      const events: Array<{ taskId: string; event: GatewayAgentEvent }> = [];
-      executor.on('event', (e) => events.push(e));
-
+  describe('shutdown', () => {
+    it('should kill server process', async () => {
+      simulateServerStart();
+      
+      // Execute something to initialize
       await executor.execute({
-        taskId: 'cmd-test',
-        prompt: 'test prompt',
+        taskId: 'init-test',
+        prompt: 'init',
         cwd: process.cwd(),
         agentType: 'opencode',
-        timeout: 5000,
       });
 
-      // Check that an event mentions the executor log
-      const logEvent = events.find(
-        (e) => e.event.type === 'log' && e.event.content?.includes('[executor]')
-      );
-      expect(logEvent).toBeDefined();
-      expect(logEvent?.event.content).toContain('opencode');
-    });
+      await executor.shutdown();
 
-    it('should use gemini command for gemini agent type', async () => {
-      const mockChild = createMockChildProcess({ exitCode: 0 });
-      (spawn as Mock).mockReturnValue(mockChild);
-
-      await executor.execute({
-        taskId: 'gemini-test',
-        prompt: 'test',
-        cwd: process.cwd(),
-        agentType: 'gemini',
-        timeout: 5000,
-      });
-
-      expect(spawn).toHaveBeenCalledWith(
-        process.platform === 'win32' ? 'gemini.cmd' : 'gemini',
-        expect.any(Array),
-        expect.any(Object)
-      );
-    });
-  });
-
-  describe('resolveArgs', () => {
-    it('should add model flag when model is provided', async () => {
-      const mockChild = createMockChildProcess({ exitCode: 0 });
-      (spawn as Mock).mockReturnValue(mockChild);
-
-      await executor.execute({
-        taskId: 'model-test',
-        prompt: 'test',
-        cwd: process.cwd(),
-        agentType: 'opencode',
-        model: 'claude-3-sonnet',
-        timeout: 5000,
-      });
-
-      expect(spawn).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.arrayContaining(['-m', 'claude-3-sonnet']),
-        expect.any(Object)
-      );
+      expect(mockServerProcess.kill).toHaveBeenCalled();
     });
   });
 });

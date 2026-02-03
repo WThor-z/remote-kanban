@@ -14,8 +14,10 @@ use git_worktree::{Worktree, WorktreeConfig, WorktreeManager};
 
 use crate::client::{WorkerClient, WorkerClientApi};
 use crate::error::{ExecutorError, Result};
-use crate::event::{ExecutionEvent, ExecutionStatus};
+use crate::event::{AgentEvent, ExecutionEvent, ExecutionEventType, ExecutionStatus};
+use crate::persistence::RunStore;
 use crate::process::AgentType;
+use crate::run::{Run, RunSummary};
 use crate::session::{ExecutionSession, SessionState};
 
 pub trait WorktreeManagerApi: Send + Sync {
@@ -63,6 +65,8 @@ impl WorktreeManagerApi for WorktreeManager {
 /// Configuration for the task executor
 #[derive(Debug, Clone)]
 pub struct ExecutorConfig {
+    /// Path to the data directory (for runs/events)
+    pub data_dir: PathBuf,
     /// Path to the repository
     pub repo_path: PathBuf,
     /// Worktree configuration
@@ -76,6 +80,7 @@ pub struct ExecutorConfig {
 impl Default for ExecutorConfig {
     fn default() -> Self {
         Self {
+            data_dir: PathBuf::from(".vk-data"),
             repo_path: PathBuf::from("."),
             worktree_config: WorktreeConfig::default(),
             auto_cleanup: false, // Manual cleanup by default for safety
@@ -105,10 +110,14 @@ pub struct TaskExecutor {
     worktree_manager: Arc<dyn WorktreeManagerApi>,
     /// Worker client
     worker_client: Arc<dyn WorkerClientApi>,
+    /// Run store for persistence
+    run_store: Arc<RunStore>,
     /// Active sessions by session ID
     sessions: Arc<RwLock<HashMap<Uuid, Arc<RwLock<ExecutionSession>>>>>,
     /// Sessions by task ID (for lookup)
     task_sessions: Arc<RwLock<HashMap<Uuid, Uuid>>>,
+    /// Active runs by session ID
+    active_runs: Arc<RwLock<HashMap<Uuid, Arc<RwLock<Run>>>>>,
 }
 
 impl TaskExecutor {
@@ -136,12 +145,16 @@ impl TaskExecutor {
         worktree_manager: Arc<dyn WorktreeManagerApi>,
         worker_client: Arc<dyn WorkerClientApi>,
     ) -> Self {
+        let run_store = Arc::new(RunStore::new(&config.data_dir));
+
         Self {
             config,
             worktree_manager,
             worker_client,
+            run_store,
             sessions: Arc::new(RwLock::new(HashMap::new())),
             task_sessions: Arc::new(RwLock::new(HashMap::new())),
+            active_runs: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -201,10 +214,53 @@ impl TaskExecutor {
         session.set_worktree(worktree);
         session.emit_progress("Worktree created, starting agent...".to_string(), Some(0.3)).await;
 
+        let worktree = session
+            .worktree
+            .as_ref()
+            .ok_or_else(|| ExecutorError::WorktreePathNotFound {
+                path: PathBuf::from("(not set)"),
+            })?;
+
+        let worktree_path = worktree
+            .path
+            .strip_prefix(&self.config.repo_path)
+            .ok()
+            .map(|p| p.to_path_buf())
+            .or_else(|| Some(worktree.path.clone()));
+
+        let task_id = request.task_id;
+        let mut run = Run::with_id(
+            session_id,
+            task_id,
+            agent_type,
+            request.prompt.clone(),
+            request.base_branch.clone(),
+        );
+        run.created_at = session.created_at;
+        run.worktree_branch = Some(worktree.branch.clone());
+        run.worktree_path = worktree_path;
+        run.status = ExecutionStatus::CreatingWorktree;
+        run.events_path = Some(
+            PathBuf::from("runs")
+                .join(task_id.to_string())
+                .join(session_id.to_string())
+                .join("events.jsonl"),
+        );
+
+        self.run_store.save_run(&run)?;
+
+        let run_handle = Arc::new(RwLock::new(run));
+        {
+            let mut active_runs = self.active_runs.write().await;
+            active_runs.insert(session_id, Arc::clone(&run_handle));
+        }
+
         // Take the event receiver before moving session into Arc
         let event_rx = session.take_event_receiver().ok_or_else(|| {
             ExecutorError::spawn_failed("Failed to get event receiver")
         })?;
+
+        let (forward_tx, forward_rx) = mpsc::channel(1000);
 
         // Store session
         let session = Arc::new(RwLock::new(session));
@@ -223,6 +279,10 @@ impl TaskExecutor {
         let worker_client = Arc::clone(&self.worker_client);
         let auto_cleanup = self.config.auto_cleanup;
         let delete_branches = self.config.delete_branches;
+
+        let run_store = Arc::clone(&self.run_store);
+        let run_handle = Arc::clone(&run_handle);
+        let active_runs = Arc::clone(&self.active_runs);
 
         tokio::spawn(async move {
             let result = run_session(session_clone.clone(), worker_client).await;
@@ -254,7 +314,39 @@ impl TaskExecutor {
             }
         });
 
-        Ok((session_id, event_rx))
+        let mut event_rx = event_rx;
+        tokio::spawn(async move {
+            while let Some(event) = event_rx.recv().await {
+                if let Err(e) = run_store.append_event(task_id, session_id, &event) {
+                    warn!("Failed to persist event for session {}: {}", session_id, e);
+                }
+
+                let run_snapshot = {
+                    let mut run = run_handle.write().await;
+                    update_run_from_event(&mut run, &event);
+                    run.increment_event_count();
+                    run.clone()
+                };
+
+                if let Err(e) = run_store.save_run(&run_snapshot) {
+                    warn!("Failed to persist run metadata for session {}: {}", session_id, e);
+                }
+
+                let should_close = matches!(event.event, ExecutionEventType::SessionEnded { .. });
+
+                if forward_tx.send(event).await.is_err() {
+                    break;
+                }
+
+                if should_close {
+                    break;
+                }
+            }
+
+            active_runs.write().await.remove(&session_id);
+        });
+
+        Ok((session_id, forward_rx))
     }
 
     /// Get a session by ID
@@ -271,6 +363,31 @@ impl TaskExecutor {
             return sessions.get(session_id).cloned();
         }
         None
+    }
+
+    /// List runs for a task
+    pub fn list_runs(&self, task_id: Uuid) -> Result<Vec<RunSummary>> {
+        self.run_store.list_runs(task_id)
+    }
+
+    /// Load run events with pagination and filters
+    pub fn load_run_events(
+        &self,
+        task_id: Uuid,
+        run_id: Uuid,
+        offset: usize,
+        limit: usize,
+        event_type: Option<String>,
+        agent_event_type: Option<String>,
+    ) -> Result<(Vec<ExecutionEvent>, bool)> {
+        self.run_store.load_events_filtered_paginated(
+            task_id,
+            run_id,
+            offset,
+            limit,
+            event_type.as_deref(),
+            agent_event_type.as_deref(),
+        )
     }
 
     /// Cancel a session
@@ -341,6 +458,11 @@ impl TaskExecutor {
         self.worktree_manager.as_ref()
     }
 
+    /// Get the run store for persistence operations
+    pub fn run_store(&self) -> &RunStore {
+        &self.run_store
+    }
+
     /// Send input to a running session
     pub async fn send_input(&self, task_id: Uuid, content: String) -> Result<()> {
         let session = self
@@ -361,6 +483,61 @@ impl TaskExecutor {
         self.worker_client
             .send_input(task_id.to_string(), content)
             .await
+    }
+}
+
+fn update_run_from_event(run: &mut Run, event: &ExecutionEvent) {
+    match &event.event {
+        ExecutionEventType::StatusChanged { new_status, .. } => {
+            run.status = *new_status;
+        }
+        ExecutionEventType::AgentEvent { event: agent_event } => {
+            match agent_event {
+                AgentEvent::Thinking { .. } => {
+                    run.metadata.thinking_count = run.metadata.thinking_count.saturating_add(1);
+                }
+                AgentEvent::Command { .. } => {
+                    run.metadata.commands_executed =
+                        run.metadata.commands_executed.saturating_add(1);
+                }
+                AgentEvent::FileChange { path, .. } => {
+                    if !run.metadata.files_modified.contains(path) {
+                        run.metadata.files_modified.push(path.clone());
+                    }
+                }
+                AgentEvent::ToolCall { .. } => {
+                    run.metadata.tools_called = run.metadata.tools_called.saturating_add(1);
+                }
+                AgentEvent::Message { .. } => {
+                    run.metadata.message_count = run.metadata.message_count.saturating_add(1);
+                }
+                AgentEvent::Error { message, .. } => {
+                    run.metadata.error_count = run.metadata.error_count.saturating_add(1);
+                    run.error = Some(message.clone());
+                }
+                AgentEvent::Completed { summary, .. } => {
+                    if let Some(summary) = summary {
+                        run.summary = Some(summary.clone());
+                    }
+                }
+                AgentEvent::RawOutput { .. } => {}
+            }
+        }
+        ExecutionEventType::SessionStarted { worktree_path, branch } => {
+            run.started_at = Some(event.timestamp);
+            if !worktree_path.is_empty() {
+                run.worktree_path = Some(PathBuf::from(worktree_path));
+            }
+            if !branch.is_empty() {
+                run.worktree_branch = Some(branch.clone());
+            }
+        }
+        ExecutionEventType::SessionEnded { status, duration_ms } => {
+            run.ended_at = Some(event.timestamp);
+            run.status = *status;
+            run.duration_ms = Some(*duration_ms);
+        }
+        ExecutionEventType::Progress { .. } => {}
     }
 }
 

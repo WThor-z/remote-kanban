@@ -9,11 +9,14 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use uuid::Uuid;
 
-use agent_runner::{ExecuteRequest, SessionState};
-use vk_core::task::TaskRepository;
+use agent_runner::{AgentType, ChatMessage, ExecuteRequest, MessageRole, Run, SessionState};
+use vk_core::kanban::KanbanTaskStatus;
+use vk_core::task::{TaskRepository, TaskStatus};
 
+use crate::gateway::protocol::GatewayTaskRequest;
 use crate::state::AppState;
 
 // ============================================================================
@@ -25,6 +28,10 @@ use crate::state::AppState;
 pub struct StartExecutionRequest {
     pub agent_type: String,
     pub base_branch: String,
+    /// Optional target host for remote execution
+    pub target_host: Option<String>,
+    /// Optional model to use (format: provider/model)
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,6 +89,12 @@ async fn start_execution(
     Path(task_id): Path<Uuid>,
     Json(req): Json<StartExecutionRequest>,
 ) -> Result<(StatusCode, Json<ExecutionResponse>), (StatusCode, Json<ErrorResponse>)> {
+    // Log received request for debugging
+    tracing::info!(
+        "Execute request for task {}: agent_type={}, target_host={:?}, model={:?}",
+        task_id, req.agent_type, req.target_host, req.model
+    );
+
     // Verify task exists
     let task = state
         .task_store()
@@ -111,11 +124,375 @@ async fn start_execution(
         task.title.clone()
     };
 
+    // Check if we should dispatch to a remote Gateway
+    if let Some(target_host) = &req.target_host {
+        return dispatch_to_gateway(&state, task_id, &prompt, &req.agent_type, target_host, req.model.as_deref()).await;
+    }
+
+    // Otherwise, try to auto-select a gateway or fall back to local execution
+    let gateway_manager = state.gateway_manager();
+    let hosts = gateway_manager.list_hosts().await;
+    
+    // Check if there's an available gateway host for this agent type
+    let available_host = hosts.iter().find(|h| {
+        h.capabilities.agents.contains(&req.agent_type) 
+            && h.status == crate::gateway::protocol::HostConnectionStatus::Online
+    });
+
+    if let Some(host) = available_host {
+        tracing::info!("Auto-selecting gateway host {} for task {}", host.host_id, task_id);
+        return dispatch_to_gateway(&state, task_id, &prompt, &req.agent_type, &host.host_id, req.model.as_deref()).await;
+    }
+
+    // Fall back to local execution
+    execute_locally(state, task_id, req.agent_type, req.base_branch, prompt).await
+}
+
+/// Dispatch task to a remote Gateway host
+async fn dispatch_to_gateway(
+    state: &AppState,
+    task_id: Uuid,
+    prompt: &str,
+    agent_type: &str,
+    _target_host: &str,
+    model: Option<&str>,
+) -> Result<(StatusCode, Json<ExecutionResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let gateway_manager = state.gateway_manager();
+    
+    // 不发送 CWD，让 Gateway 使用自己配置的工作目录
+    // 这样可以避免与本地 OpenCode 实例的锁文件冲突
+    let gateway_task = GatewayTaskRequest {
+        task_id: task_id.to_string(),
+        prompt: prompt.to_string(),
+        cwd: String::new(),  // 空字符串，让 Gateway 使用自己的 defaultCwd
+        agent_type: agent_type.to_string(),
+        model: model.map(String::from),
+        env: HashMap::new(),
+        timeout: None,
+        metadata: serde_json::Value::Null,
+    };
+
+    match gateway_manager.dispatch_task(gateway_task).await {
+        Ok(host_id) => {
+            tracing::info!("Task {} dispatched to gateway host {}", task_id, host_id);
+            
+            // Create a Run record for this gateway execution
+            let run_id = Uuid::new_v4();
+            let parsed_agent_type = AgentType::from_str(agent_type)
+                .unwrap_or(AgentType::OpenCode);
+            let mut run = Run::new(
+                task_id,
+                parsed_agent_type,
+                prompt.to_string(),
+                "main".to_string(), // Gateway doesn't use worktrees, use default branch
+            );
+            // Override the generated ID to use our run_id
+            run.id = run_id;
+            run.mark_started();
+            
+            // Save the initial run record
+            if let Err(e) = state.executor().run_store().save_run(&run) {
+                tracing::warn!("Failed to save initial run record for gateway task {}: {}", task_id, e);
+            } else {
+                tracing::info!("Created run {} for gateway task {}", run_id, task_id);
+            }
+            
+            // Set up event forwarding from Gateway to Socket.IO
+            let state_clone = state.clone();
+            let task_id_str = task_id.to_string();
+            let prompt_clone = prompt.to_string();
+            let agent_type_clone = parsed_agent_type;
+            tokio::spawn(async move {
+                let mut event_rx = state_clone.gateway_manager().subscribe();
+                let io = state_clone.get_socket_io().await;
+                let mut event_count: u32 = 0;
+                // Accumulate stdout content for final message
+                let mut accumulated_output = String::new();
+                // Fixed message ID for streaming updates
+                let message_id = uuid::Uuid::new_v4().to_string();
+                
+                if let Some(io) = io {
+                    // Move task to Doing when execution starts
+                    {
+                        let kanban_store = state_clone.kanban_store();
+                        if let Err(e) = kanban_store.move_task(&task_id_str, KanbanTaskStatus::Doing, None).await {
+                            tracing::warn!("Failed to move kanban task {} to Doing: {}", task_id_str, e);
+                        } else {
+                            tracing::info!("Kanban task {} moved to Doing", task_id_str);
+                            // Broadcast initial kanban sync
+                            let board_state = kanban_store.get_state().await;
+                            let _ = io.emit("kanban:sync", &board_state);
+                        }
+                    }
+                    
+                    // Send initial "working" message
+                    {
+                        #[derive(serde::Serialize)]
+                        struct MessagePayload {
+                            #[serde(rename = "taskId")]
+                            task_id: String,
+                            message: TaskMessage,
+                        }
+                        #[derive(serde::Serialize)]
+                        struct TaskMessage {
+                            id: String,
+                            role: String,
+                            content: String,
+                            timestamp: i64,
+                            #[serde(rename = "isStreaming")]
+                            is_streaming: bool,
+                        }
+                        
+                        let _ = io.emit("task:message", &MessagePayload {
+                            task_id: task_id_str.clone(),
+                            message: TaskMessage {
+                                id: message_id.clone(),
+                                role: "assistant".to_string(),
+                                content: "正在工作中...".to_string(),
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as i64,
+                                is_streaming: true,
+                            },
+                        });
+                    }
+                    
+                    while let Ok(event) = event_rx.recv().await {
+                        if event.task_id == task_id_str {
+                            event_count += 1;
+                            
+                            // Forward gateway event to Socket.IO for Logs panel
+                            let _ = io.emit("task:gateway_event", &event);
+                            
+                            // Accumulate stdout content
+                            if let Some(content) = &event.event.content {
+                                match event.event.event_type {
+                                    crate::gateway::protocol::GatewayAgentEventType::Stdout => {
+                                        if !content.starts_with("[executor]") && 
+                                           !content.starts_with("[Gateway]") &&
+                                           !content.is_empty() {
+                                            accumulated_output.push_str(content);
+                                        }
+                                    }
+                                    crate::gateway::protocol::GatewayAgentEventType::Message => {
+                                        accumulated_output.push_str(content);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            
+                            // Check for Completed/Failed events and update Run record
+                            match event.event.event_type {
+                                crate::gateway::protocol::GatewayAgentEventType::Completed => {
+                                    // Update Run record
+                                    let mut run = Run::new(
+                                        task_id,
+                                        agent_type_clone,
+                                        prompt_clone.clone(),
+                                        "main".to_string(),
+                                    );
+                                    run.id = run_id;
+                                    run.mark_started();
+                                    run.mark_completed(0, event.event.content.clone());
+                                    run.event_count = event_count;
+                                    
+                                    if let Err(e) = state_clone.executor().run_store().save_run(&run) {
+                                        tracing::warn!("Failed to save completed run for task {}: {}", task_id_str, e);
+                                    } else {
+                                        tracing::info!("Run {} completed for gateway task {}", run_id, task_id_str);
+                                    }
+                                    
+                                    // Send final complete message (replacing the streaming one)
+                                    {
+                                        #[derive(serde::Serialize)]
+                                        struct MessagePayload {
+                                            #[serde(rename = "taskId")]
+                                            task_id: String,
+                                            message: TaskMessage,
+                                        }
+                                        #[derive(serde::Serialize)]
+                                        struct TaskMessage {
+                                            id: String,
+                                            role: String,
+                                            content: String,
+                                            timestamp: i64,
+                                            #[serde(rename = "isStreaming")]
+                                            is_streaming: bool,
+                                        }
+                                        
+                                        let final_content = if accumulated_output.is_empty() {
+                                            event.event.content.clone().unwrap_or_else(|| "任务完成".to_string())
+                                        } else {
+                                            accumulated_output.clone()
+                                        };
+                                        
+                                        let msg_timestamp = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis() as i64;
+                                        
+                                        let _ = io.emit("task:message", &MessagePayload {
+                                            task_id: task_id_str.clone(),
+                                            message: TaskMessage {
+                                                id: message_id.clone(),
+                                                role: "assistant".to_string(),
+                                                content: final_content.clone(),
+                                                timestamp: msg_timestamp,
+                                                is_streaming: false,
+                                            },
+                                        });
+                                        
+                                        // Persist the message to disk
+                                        let chat_msg = ChatMessage::with_id(
+                                            message_id.clone(),
+                                            MessageRole::Assistant,
+                                            final_content,
+                                        );
+                                        if let Err(e) = state_clone.executor().run_store().append_message(task_id, run_id, &chat_msg) {
+                                            tracing::warn!("Failed to persist message for task {}: {}", task_id_str, e);
+                                        }
+                                    }
+                                    
+                                    // Broadcast kanban sync
+                                    let kanban_store = state_clone.kanban_store();
+                                    let board_state = kanban_store.get_state().await;
+                                    let _ = io.emit("kanban:sync", &board_state);
+                                    tracing::info!("Broadcasted kanban:sync after task {} completed", task_id_str);
+                                    break;
+                                }
+                                crate::gateway::protocol::GatewayAgentEventType::Failed => {
+                                    // Update Run record
+                                    let mut run = Run::new(
+                                        task_id,
+                                        agent_type_clone,
+                                        prompt_clone.clone(),
+                                        "main".to_string(),
+                                    );
+                                    run.id = run_id;
+                                    run.mark_started();
+                                    run.mark_failed(event.event.content.clone().unwrap_or_else(|| "Unknown error".to_string()));
+                                    run.event_count = event_count;
+                                    
+                                    if let Err(e) = state_clone.executor().run_store().save_run(&run) {
+                                        tracing::warn!("Failed to save failed run for task {}: {}", task_id_str, e);
+                                    } else {
+                                        tracing::info!("Run {} failed for gateway task {}", run_id, task_id_str);
+                                    }
+                                    
+                                    // Send error message
+                                    {
+                                        #[derive(serde::Serialize)]
+                                        struct MessagePayload {
+                                            #[serde(rename = "taskId")]
+                                            task_id: String,
+                                            message: TaskMessage,
+                                        }
+                                        #[derive(serde::Serialize)]
+                                        struct TaskMessage {
+                                            id: String,
+                                            role: String,
+                                            content: String,
+                                            timestamp: i64,
+                                            #[serde(rename = "isStreaming")]
+                                            is_streaming: bool,
+                                        }
+                                        
+                                        let error_content = event.event.content.clone()
+                                            .unwrap_or_else(|| "任务执行失败".to_string());
+                                        
+                                        let error_msg_content = format!("❌ {}", error_content);
+                                        let msg_timestamp = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis() as i64;
+                                        
+                                        let _ = io.emit("task:message", &MessagePayload {
+                                            task_id: task_id_str.clone(),
+                                            message: TaskMessage {
+                                                id: message_id.clone(),
+                                                role: "system".to_string(),
+                                                content: error_msg_content.clone(),
+                                                timestamp: msg_timestamp,
+                                                is_streaming: false,
+                                            },
+                                        });
+                                        
+                                        // Persist the error message to disk
+                                        let chat_msg = ChatMessage::with_id(
+                                            message_id.clone(),
+                                            MessageRole::System,
+                                            error_msg_content,
+                                        );
+                                        if let Err(e) = state_clone.executor().run_store().append_message(task_id, run_id, &chat_msg) {
+                                            tracing::warn!("Failed to persist error message for task {}: {}", task_id_str, e);
+                                        }
+                                    }
+                                    
+                                    // Broadcast kanban sync
+                                    let kanban_store = state_clone.kanban_store();
+                                    let board_state = kanban_store.get_state().await;
+                                    let _ = io.emit("kanban:sync", &board_state);
+                                    tracing::info!("Broadcasted kanban:sync after task {} failed", task_id_str);
+                                    break;
+                                }
+                                _ => {}
+                            }
+                            
+                            // Also emit as execution_event for the ExecutionLogPanel
+                            #[derive(serde::Serialize)]
+                            struct ExecutionEventBase {
+                                task_id: String,
+                                event_type: String,
+                                content: Option<String>,
+                                timestamp: u64,
+                            }
+                            let _ = io.emit("task:execution_event", &ExecutionEventBase {
+                                task_id: task_id_str.clone(),
+                                event_type: format!("{:?}", event.event.event_type).to_lowercase(),
+                                content: event.event.content.clone(),
+                                timestamp: event.event.timestamp,
+                            });
+                        }
+                    }
+                }
+            });
+
+            Ok((
+                StatusCode::ACCEPTED,
+                Json(ExecutionResponse {
+                    session_id: run_id, // Use the run_id as session_id for consistency
+                    task_id,
+                    status: "dispatched".to_string(),
+                    message: format!("Task dispatched to gateway host: {}", host_id),
+                }),
+            ))
+        }
+        Err(e) => {
+            tracing::error!("Failed to dispatch task to gateway: {}", e);
+            Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: format!("Gateway dispatch failed: {}", e),
+                }),
+            ))
+        }
+    }
+}
+
+/// Execute task locally using the built-in executor
+async fn execute_locally(
+    state: AppState,
+    task_id: Uuid,
+    agent_type: String,
+    base_branch: String,
+    prompt: String,
+) -> Result<(StatusCode, Json<ExecutionResponse>), (StatusCode, Json<ErrorResponse>)> {
     // Create execute request
     let execute_req = ExecuteRequest {
         task_id,
-        agent_type: req.agent_type,
-        base_branch: req.base_branch,
+        agent_type,
+        base_branch,
         prompt,
     };
 
@@ -132,7 +509,6 @@ async fn start_execution(
 
     // Spawn event bridge to Socket.IO
     let state_clone = state.clone();
-    // let task_id_clone = task_id;
     tokio::spawn(async move {
         let io = state_clone.get_socket_io().await;
         if let Some(io) = io {
@@ -166,6 +542,53 @@ async fn start_execution(
                             task_id: event.task_id,
                             status: status_str.to_string(),
                         });
+                        
+                        // Update task status in TaskStore based on execution status
+                        let task_status = match new_status {
+                            agent_runner::ExecutionStatus::Running => Some(TaskStatus::InProgress),
+                            agent_runner::ExecutionStatus::Completed => Some(TaskStatus::Done),
+                            agent_runner::ExecutionStatus::Failed |
+                            agent_runner::ExecutionStatus::Cancelled => Some(TaskStatus::Done),
+                            _ => None,
+                        };
+                        
+                        if let Some(new_task_status) = task_status {
+                            // Update TaskStore
+                            let task_store = state_clone.task_store();
+                            if let Ok(Some(mut task)) = task_store.get(event.task_id).await {
+                                task.status = new_task_status;
+                                if let Err(e) = task_store.update(task).await {
+                                    tracing::warn!("Failed to update task status: {}", e);
+                                } else {
+                                    tracing::info!(
+                                        "Task {} status updated to {:?}",
+                                        event.task_id, new_task_status
+                                    );
+                                }
+                            }
+                            
+                            // Update KanbanStore (this is what the UI actually reads)
+                            let kanban_status = match new_task_status {
+                                TaskStatus::InProgress => KanbanTaskStatus::Doing,
+                                TaskStatus::Done => KanbanTaskStatus::Done,
+                                TaskStatus::InReview => KanbanTaskStatus::Doing,
+                                TaskStatus::Todo => KanbanTaskStatus::Todo,
+                            };
+                            
+                            let kanban_store = state_clone.kanban_store();
+                            let task_id_str = event.task_id.to_string();
+                            if let Err(e) = kanban_store.move_task(&task_id_str, kanban_status, None).await {
+                                tracing::warn!("Failed to move kanban task: {}", e);
+                            } else {
+                                tracing::info!(
+                                    "Kanban task {} moved to {:?}",
+                                    event.task_id, kanban_status
+                                );
+                                // Broadcast kanban sync to all clients
+                                let board_state = kanban_store.get_state().await;
+                                let _ = io.emit("kanban:sync", &board_state);
+                            }
+                        }
                     },
                     agent_runner::ExecutionEventType::AgentEvent { event: agent_event } => {
                         match agent_event {

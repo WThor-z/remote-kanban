@@ -4,24 +4,20 @@ import { useKanban } from './hooks/useKanban';
 import { useTaskSession } from './hooks/useTaskSession';
 import { useTaskApi, type CreateTaskRequest } from './hooks/useTaskApi';
 import { useTaskExecutor } from './hooks/useTaskExecutor';
-import { Bot, Plus, Server, HardDrive, Plug, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
-import { InputBar } from './components/InputBar';
+import { Bot, Plus, Server, HardDrive, Plug, RefreshCw } from 'lucide-react';
 import { KanbanBoard } from './components/kanban/KanbanBoard';
-import { AgentPanel } from './components/agent';
 import { TaskDetailPanel, CreateTaskModal } from './components/task';
 import type { KanbanTask, AgentType } from '@opencode-vibe/protocol';
 import { useGatewayInfo } from './hooks/useGatewayInfo';
-import { resolveApiBaseUrl, resolveGatewaySocketUrl, resolveLegacySocketUrl } from './config/endpoints';
+import { resolveApiBaseUrl, resolveGatewaySocketUrl } from './config/endpoints';
 
 function App() {
   const { isConnected, socket } = useOpencode();
   const { board, moveTask, deleteTask, requestSync } = useKanban();
   const [selectedTask, setSelectedTask] = useState<KanbanTask | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [showLegacyAgent, setShowLegacyAgent] = useState(false);
 
   const gatewaySocketUrl = resolveGatewaySocketUrl();
-  const legacySocketUrl = resolveLegacySocketUrl();
   const apiBaseUrl = resolveApiBaseUrl();
   const {
     info: gatewayInfo,
@@ -35,12 +31,15 @@ function App() {
     isLoading: isTaskApiLoading,
     error: taskApiError,
     createTask,
+    getTask,
     clearError: clearTaskApiError,
   } = useTaskApi();
 
   // Task executor hook for isolated worktree execution
   const {
     currentSession,
+    isExecuting,
+    error: executorError,
     startExecution,
     stopExecution: stopIsolatedExecution,
     getExecutionStatus,
@@ -86,6 +85,38 @@ function App() {
     return false;
   }, [createTask, requestSync]);
 
+  // Handle task creation and immediate execution
+  const handleCreateAndStartTask = useCallback(async (data: CreateTaskRequest): Promise<boolean> => {
+    console.log('[App] handleCreateAndStartTask called with data:', data);
+    console.log('[App] data.targetHost:', data.targetHost);
+    console.log('[App] data.model:', data.model);
+    
+    const task = await createTask(data);
+    if (task) {
+      console.log('[App] Task created successfully, starting execution:', task);
+      // Request sync to refresh kanban board
+      requestSync();
+      
+      // Start execution with model and targetHost from the create request
+      const executeRequest = {
+        agentType: (data.agentType || 'opencode') as AgentType,
+        baseBranch: data.baseBranch || 'main',
+        targetHost: data.targetHost,
+        model: data.model,
+      };
+      console.log('[App] Calling startExecution with:', executeRequest);
+      
+      const result = await startExecution(task.id, executeRequest);
+      
+      if (result) {
+        console.log('[App] Task execution started:', result);
+        await getExecutionStatus(task.id);
+        return true;
+      }
+    }
+    return false;
+  }, [createTask, requestSync, startExecution, getExecutionStatus]);
+
   const handleCloseCreateModal = useCallback(() => {
     setIsCreateModalOpen(false);
     clearTaskApiError();
@@ -109,15 +140,29 @@ function App() {
   };
 
   const handleExecuteTask = async (taskId: string) => {
-    const task = board.tasks[taskId];
-    if (task) {
+    // Fetch full task from REST API to get all fields including model
+    // The Kanban board tasks (board.tasks) don't include model/agentType/baseBranch fields
+    const fullTask = await getTask(taskId);
+    
+    if (fullTask) {
       // Start execution in isolated worktree via REST API
-      const agentType = (task as unknown as { agentType?: string }).agentType || 'opencode';
-      const baseBranch = (task as unknown as { baseBranch?: string }).baseBranch || 'main';
-      await startExecution(taskId, {
+      const agentType = fullTask.agentType || 'opencode';
+      const baseBranch = fullTask.baseBranch || 'main';
+      const model = fullTask.model || undefined;
+      
+      console.log('[App] handleExecuteTask:', { taskId, agentType, baseBranch, model });
+      
+      const result = await startExecution(taskId, {
         agentType: agentType as AgentType,
         baseBranch,
+        model,
+        // Note: targetHost is not saved on the task, so we let the backend auto-select
       });
+      if (result) {
+        await getExecutionStatus(taskId);
+      }
+    } else {
+      console.error('[App] handleExecuteTask: Failed to fetch task from REST API:', taskId);
     }
     // Socket.IO updates will come automatically via task:execution_event
   };
@@ -239,36 +284,14 @@ function App() {
         />
       </div>
 
-      <InputBar />
-
-      {/* Legacy Agent Console */}
-      <div className="w-full max-w-6xl">
-        <button
-          type="button"
-          onClick={() => setShowLegacyAgent(!showLegacyAgent)}
-          className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-slate-800/70 border border-slate-700/60 text-slate-200"
-        >
-          <div>
-            <div className="text-sm font-semibold">Legacy Agent Console</div>
-            <div className="text-xs text-slate-400">Requires legacy TS server at {legacySocketUrl}</div>
-          </div>
-          {showLegacyAgent ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-        </button>
-        {showLegacyAgent && (
-          <div className="mt-3">
-            <AgentPanel />
-          </div>
-        )}
-      </div>
-
       {/* Task Detail Panel (Modal) */}
       {selectedTask && (
         <TaskDetailPanel
           task={selectedTask}
           history={history}
           status={status}
-          isLoading={isLoading}
-          error={error}
+          isLoading={isLoading || isExecuting}
+          error={error || executorError}
           executionInfo={currentSession && currentSession.taskId === selectedTask.id ? {
             sessionId: currentSession.sessionId,
             worktreePath: currentSession.worktreePath,
@@ -289,6 +312,7 @@ function App() {
         isOpen={isCreateModalOpen}
         onClose={handleCloseCreateModal}
         onCreate={handleCreateTask}
+        onCreateAndStart={handleCreateAndStartTask}
         isLoading={isTaskApiLoading}
         error={taskApiError}
       />

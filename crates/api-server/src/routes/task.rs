@@ -8,7 +8,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use agent_runner::{ExecutionEvent, ExecutionStatus, RunSummary};
+use agent_runner::{ChatMessage, ExecutionEvent, ExecutionStatus, RunSummary};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -32,6 +32,8 @@ pub struct CreateTaskRequest {
     pub agent_type: Option<String>,
     #[serde(default)]
     pub base_branch: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +58,7 @@ pub struct TaskResponse {
     pub priority: TaskPriority,
     pub agent_type: Option<String>,
     pub base_branch: Option<String>,
+    pub model: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -96,6 +99,12 @@ pub struct RunEventsResponse {
     pub next_offset: Option<usize>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunMessagesResponse {
+    pub messages: Vec<ChatMessage>,
+}
+
 impl From<RunSummary> for RunSummaryResponse {
     fn from(run: RunSummary) -> Self {
         Self {
@@ -123,6 +132,7 @@ impl From<Task> for TaskResponse {
             priority: task.priority,
             agent_type: task.agent_type,
             base_branch: task.base_branch,
+            model: task.model,
             created_at: task.created_at.to_rfc3339(),
             updated_at: task.updated_at.to_rfc3339(),
         }
@@ -185,6 +195,10 @@ async fn create_task(
 
     if let Some(base_branch) = req.base_branch {
         task = task.with_base_branch(base_branch);
+    }
+
+    if let Some(model) = req.model {
+        task = task.with_model(model);
     }
 
     let created = state.task_store().create(task).await.map_err(|e| {
@@ -331,6 +345,43 @@ async fn list_run_events(
     }))
 }
 
+/// GET /api/tasks/:id/runs/:run_id/messages - List messages for a run
+async fn list_run_messages(
+    State(state): State<AppState>,
+    Path((task_id, run_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<RunMessagesResponse>, (StatusCode, Json<ErrorResponse>)> {
+    // Verify task exists
+    let task = state.task_store().get(task_id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    if task.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Task {} not found", task_id),
+            }),
+        ));
+    }
+
+    // Load messages from RunStore
+    let messages = state.executor().run_store().load_messages(task_id, run_id).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    Ok(Json(RunMessagesResponse { messages }))
+}
+
 /// PATCH /api/tasks/:id - Update a task
 async fn update_task(
     State(state): State<AppState>,
@@ -435,4 +486,5 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/tasks/{id}/runs", get(list_task_runs))
         .route("/api/tasks/{id}/runs/{run_id}/events", get(list_run_events))
+        .route("/api/tasks/{id}/runs/{run_id}/messages", get(list_run_messages))
 }
