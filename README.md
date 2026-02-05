@@ -6,12 +6,12 @@ AI-Powered Development with Visual Task Management
 
 ## Features
 
-- **可视化看板**: 拖拽式三列布局 (Todo / Doing / Done)
+- **可视化看板**: 拖拽式三列布局 (To Do / Doing / Done)
 - **AI 任务执行**: 点击任务卡片，一键启动 AI Agent 执行开发任务
 - **实时同步**: 基于 WebSocket 的多客户端实时状态同步
 - **命令驱动**: 支持 `/task` 命令快速创建任务
 - **对话历史**: 保存并展示 AI 执行过程中的完整对话
-- **文件持久化**: 任务数据自动保存到 `.opencode/kanban.json`
+- **文件持久化**: 任务数据自动保存到 `.opencode/kanban.json` 与 `.opencode/tasks/`（Node 模式），或 `.vk-data/tasks.json` 与 `.vk-data/kanban.json`（Rust 模式）
 
 功能目录见 `docs/features/index.md`。
 
@@ -69,16 +69,36 @@ cd packages/server && pnpm dev
 cd packages/client && pnpm dev
 ```
 
+Rust API 模式（REST 8081 + Socket.IO 8080）：
+
+```bash
+# 可选：使用 Rust API 后端
+cd crates && cargo run -p api-server
+
+# 可选：远程执行网关
+cd services/agent-gateway && pnpm dev
+# 需要环境变量：GATEWAY_SERVER_URL、GATEWAY_AUTH_TOKEN
+```
+
 访问 http://localhost:5173
 
 ## Project Structure
 
-```
+```text
+crates/
+├── core/           # Rust 核心模型与存储（crate: vk-core）
+├── api-server/     # Rust REST + Socket.IO 后端
+├── agent-runner/   # 任务执行与运行持久化
+└── git-worktree/   # Git worktree 管理
+
 packages/
-├── protocol/       # 共享类型定义和工具函数
-├── server/         # WebSocket 服务端 (Express + Socket.io)
+├── protocol/       # 共享协议/类型与解析
+├── server/         # Node Socket.IO 服务端
 ├── client/         # React 前端 (Vite + TailwindCSS)
-└── pty-manager/    # PTY 进程管理 (已弃用，保留兼容)
+└── pty-manager/    # PTY 进程管理 (已弃用，兼容保留)
+
+services/
+└── agent-gateway/  # 远程任务执行网关
 ```
 
 ## Usage
@@ -114,10 +134,12 @@ packages/
 | Layer | Technology |
 |-------|------------|
 | Frontend | React 18, Vite, TailwindCSS, @dnd-kit |
-| Backend | Node.js, Express, Socket.io |
+| Backend | Node.js, Express, Socket.IO |
 | AI Integration | OpenCode HTTP API |
 | Testing | Vitest |
-| Language | TypeScript |
+| Language | TypeScript, Rust |
+
+> 备注：Rust API 作为替代后端实现可选。
 
 ## API Reference
 
@@ -175,4 +197,4 @@ MIT
 
 - [OpenCode](https://opencode.ai) - AI 编程助手
 - [dnd-kit](https://dndkit.com) - 拖拽库
-- [Socket.io](https://socket.io) - 实时通信
+- [Socket.IO](https://socket.io) - 实时通信
