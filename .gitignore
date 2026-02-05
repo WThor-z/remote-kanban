@@ -47,6 +47,9 @@ AGENT.md
 .opencode/
 packages/*/.opencode/
 
+# Git worktrees
+.worktrees/
+
 # Vibe Kanban 数据目录
 .vk-data/
 
