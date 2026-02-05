@@ -5,7 +5,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::get,
+    routing::{delete, get},
     Json, Router,
 };
 use agent_runner::{ChatMessage, ExecutionEvent, ExecutionStatus, RunSummary};
@@ -275,6 +275,63 @@ async fn list_task_runs(
     ))
 }
 
+/// DELETE /api/tasks/:id/runs - Delete all runs for a task
+async fn delete_task_runs(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let task = state.task_store().get(id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    if task.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Task {} not found", id),
+            }),
+        ));
+    }
+
+    let runs = state.executor().list_runs(id).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    if runs.iter().any(|run| run.status.is_active()) {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                error: "Run is active".to_string(),
+            }),
+        ));
+    }
+
+    state
+        .executor()
+        .run_store()
+        .delete_task_runs(id)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// GET /api/tasks/:id/runs/:run_id/events - List events for a run
 async fn list_run_events(
     State(state): State<AppState>,
@@ -382,6 +439,72 @@ async fn list_run_messages(
     Ok(Json(RunMessagesResponse { messages }))
 }
 
+/// DELETE /api/tasks/:id/runs/:run_id - Delete a run
+async fn delete_run(
+    State(state): State<AppState>,
+    Path((task_id, run_id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let task = state.task_store().get(task_id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    if task.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Task {} not found", task_id),
+            }),
+        ));
+    }
+
+    let runs = state.executor().list_runs(task_id).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    let run = runs.iter().find(|run| run.id == run_id).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Run {} not found", run_id),
+            }),
+        )
+    })?;
+
+    if run.status.is_active() {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                error: "Run is active".to_string(),
+            }),
+        ));
+    }
+
+    state
+        .executor()
+        .run_store()
+        .delete_run(task_id, run_id)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// PATCH /api/tasks/:id - Update a task
 async fn update_task(
     State(state): State<AppState>,
@@ -484,7 +607,243 @@ pub fn router() -> Router<AppState> {
             "/api/tasks/{id}",
             get(get_task).patch(update_task).delete(delete_task),
         )
-        .route("/api/tasks/{id}/runs", get(list_task_runs))
+        .route(
+            "/api/tasks/{id}/runs",
+            get(list_task_runs).delete(delete_task_runs),
+        )
+        .route("/api/tasks/{id}/runs/{run_id}", delete(delete_run))
         .route("/api/tasks/{id}/runs/{run_id}/events", get(list_run_events))
         .route("/api/tasks/{id}/runs/{run_id}/messages", get(list_run_messages))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use agent_runner::{AgentType, Run};
+    use axum::{body::Body, http::Request};
+    use tempfile::TempDir;
+    use tower::ServiceExt;
+    use vk_core::kanban::KanbanStore;
+    use vk_core::task::FileTaskStore;
+
+    use crate::gateway::GatewayManager;
+
+    async fn build_state() -> (AppState, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let data_dir = temp_dir.path().to_path_buf();
+
+        let tasks_path = data_dir.join("tasks.json");
+        let task_store = Arc::new(FileTaskStore::new(tasks_path).await.unwrap());
+        let kanban_path = data_dir.join("kanban.json");
+        let kanban_store = Arc::new(
+            KanbanStore::with_task_store(kanban_path, Arc::clone(&task_store))
+                .await
+                .unwrap(),
+        );
+        let gateway_manager = Arc::new(GatewayManager::with_stores(
+            Arc::clone(&task_store),
+            Arc::clone(&kanban_store),
+        ));
+        let state = AppState::with_stores(
+            data_dir,
+            Arc::clone(&task_store),
+            Arc::clone(&kanban_store),
+            Arc::clone(&gateway_manager),
+        )
+        .await
+        .unwrap();
+
+        (state, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn delete_run_returns_no_content() {
+        let (state, _temp_dir) = build_state().await;
+        let task = state
+            .task_store()
+            .create(Task::new("Delete run test".to_string()))
+            .await
+            .unwrap();
+
+        let mut run = Run::new(
+            task.id,
+            AgentType::OpenCode,
+            "Test prompt".to_string(),
+            "main".to_string(),
+        );
+        run.update_status(ExecutionStatus::Completed);
+        state.executor().run_store().save_run(&run).unwrap();
+
+        let app = router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/tasks/{}/runs/{}", task.id, run.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(state.executor().list_runs(task.id).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_run_missing_task_returns_not_found() {
+        let (state, _temp_dir) = build_state().await;
+        let task_id = Uuid::new_v4();
+        let run_id = Uuid::new_v4();
+
+        let app = router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/tasks/{}/runs/{}", task_id, run_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_run_missing_run_returns_not_found() {
+        let (state, _temp_dir) = build_state().await;
+        let task = state
+            .task_store()
+            .create(Task::new("Delete run missing".to_string()))
+            .await
+            .unwrap();
+        let run_id = Uuid::new_v4();
+
+        let app = router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/tasks/{}/runs/{}", task.id, run_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_run_active_run_returns_conflict() {
+        let (state, _temp_dir) = build_state().await;
+        let task = state
+            .task_store()
+            .create(Task::new("Delete run active".to_string()))
+            .await
+            .unwrap();
+
+        let mut run = Run::new(
+            task.id,
+            AgentType::OpenCode,
+            "Test prompt".to_string(),
+            "main".to_string(),
+        );
+        run.update_status(ExecutionStatus::Running);
+        state.executor().run_store().save_run(&run).unwrap();
+
+        let app = router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/tasks/{}/runs/{}", task.id, run.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn delete_task_runs_removes_all() {
+        let (state, _temp_dir) = build_state().await;
+        let task = state
+            .task_store()
+            .create(Task::new("Delete task runs".to_string()))
+            .await
+            .unwrap();
+
+        let mut first_run = Run::new(
+            task.id,
+            AgentType::OpenCode,
+            "Test prompt 1".to_string(),
+            "main".to_string(),
+        );
+        first_run.update_status(ExecutionStatus::Completed);
+        state.executor().run_store().save_run(&first_run).unwrap();
+
+        let mut second_run = Run::new(
+            task.id,
+            AgentType::OpenCode,
+            "Test prompt 2".to_string(),
+            "main".to_string(),
+        );
+        second_run.update_status(ExecutionStatus::Completed);
+        state.executor().run_store().save_run(&second_run).unwrap();
+
+        let app = router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/tasks/{}/runs", task.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(state.executor().list_runs(task.id).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_task_runs_rejects_active_runs() {
+        let (state, _temp_dir) = build_state().await;
+        let task = state
+            .task_store()
+            .create(Task::new("Delete task runs active".to_string()))
+            .await
+            .unwrap();
+
+        let mut run = Run::new(
+            task.id,
+            AgentType::OpenCode,
+            "Test prompt".to_string(),
+            "main".to_string(),
+        );
+        run.update_status(ExecutionStatus::Running);
+        state.executor().run_store().save_run(&run).unwrap();
+
+        let app = router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/tasks/{}/runs", task.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
 }
