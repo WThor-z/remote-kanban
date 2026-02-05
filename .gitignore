@@ -43,11 +43,6 @@ coverage/
 .cursorrules
 AGENT.md
 
-# 项目计划文档 (本地专用)
-docs/plans/
-*_Plan.md
-*_plan.md
-
 # OpenCode 运行时目录
 .opencode/
 packages/*/.opencode/
