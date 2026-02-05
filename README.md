@@ -13,6 +13,8 @@ AI-Powered Development with Visual Task Management
 - **对话历史**: 保存并展示 AI 执行过程中的完整对话
 - **文件持久化**: 任务数据自动保存到 `.opencode/kanban.json`
 
+功能目录见 `docs/features/index.md`。
+
 ## Screenshots
 
 ```
