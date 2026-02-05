@@ -132,6 +132,16 @@ packages/
 | `task:status` | Server → Client | 任务状态更新 |
 | `task:message` | Server → Client | AI 消息 |
 
+### REST API
+
+Task cleanup endpoints:
+
+| Method | Endpoint | Description |
+|--------|----------|------|
+| `DELETE` | `/api/tasks/{task_id}/runs/{run_id}` | Delete a specific run record |
+| `DELETE` | `/api/tasks/{task_id}/runs` | Delete all run records for a task |
+| `POST` | `/api/tasks/{task_id}/cleanup` | Clean up the task worktree |
+
 ### Commands
 
 | Command | Description |
