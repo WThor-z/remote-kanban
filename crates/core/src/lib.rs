@@ -9,6 +9,7 @@
 pub mod agent;
 pub mod error;
 pub mod kanban;
+pub mod project;
 pub mod task;
 
 pub use error::Error;

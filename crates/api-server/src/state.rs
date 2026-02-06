@@ -8,6 +8,7 @@ use socketioxide::SocketIo;
 use agent_runner::{ExecutorConfig, TaskExecutor};
 use git_worktree::WorktreeConfig;
 use vk_core::kanban::KanbanStore;
+use vk_core::project::ProjectStore;
 use vk_core::task::FileTaskStore;
 
 use crate::gateway::GatewayManager;
@@ -21,6 +22,7 @@ pub struct AppState {
 struct AppStateInner {
     pub task_store: Arc<FileTaskStore>,
     pub kanban_store: Arc<KanbanStore>,
+    pub project_store: Arc<ProjectStore>,
     pub executor: Arc<TaskExecutor>,
     #[allow(dead_code)]
     pub repo_path: PathBuf,
@@ -50,6 +52,9 @@ impl AppState {
         kanban_store: Arc<KanbanStore>,
         gateway_manager: Arc<GatewayManager>,
     ) -> vk_core::Result<Self> {
+        let project_path = data_dir.join("projects.json");
+        let project_store = Arc::new(ProjectStore::new(project_path).await?);
+
         // Get repository path (current directory or from env)
         let repo_path = std::env::var("VK_REPO_PATH")
             .map(PathBuf::from)
@@ -76,6 +81,7 @@ impl AppState {
             inner: Arc::new(AppStateInner {
                 task_store,
                 kanban_store,
+                project_store,
                 executor: Arc::new(executor),
                 repo_path,
                 socket_io: Arc::new(RwLock::new(None)),
@@ -115,6 +121,17 @@ impl AppState {
     #[allow(dead_code)]
     pub fn kanban_store_arc(&self) -> Arc<KanbanStore> {
         Arc::clone(&self.inner.kanban_store)
+    }
+
+    /// Get reference to the project store
+    pub fn project_store(&self) -> &ProjectStore {
+        &self.inner.project_store
+    }
+
+    /// Get shared Arc to the project store
+    #[allow(dead_code)]
+    pub fn project_store_arc(&self) -> Arc<ProjectStore> {
+        Arc::clone(&self.inner.project_store)
     }
 
     /// Get reference to the task executor

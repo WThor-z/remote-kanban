@@ -83,6 +83,7 @@ async fn main() {
     let rest_app = Router::new()
         .merge(routes::health::router())
         .merge(routes::task::router())
+        .merge(routes::project::router())
         .merge(routes::executor::router())
         .with_state(app_state.clone())
         .merge(routes::gateway::router(app_state.gateway_manager_arc()))
