@@ -1,28 +1,28 @@
-# {Feature Name}
+# {功能名称}
 
-## Summary
-{1-3 sentences describing user value}
+## 概述
+{用 1-3 句话说明用户价值或模块职责}
 
-## Entry Points
-- UI: {pages or screens}
-- API: {endpoints or N/A}
-- CLI: {commands or N/A}
+## 入口
+- UI：{页面或组件入口；无则写 无}
+- API：{接口、包名或路由；无则写 无}
+- CLI：{命令入口；无则写 无}
 
-## Behavior and Boundaries
-- {key behavior}
-- {edge cases and limits}
+## 行为与边界
+- {核心行为}
+- {边界条件、限制或不支持场景}
 
-## Data and Storage Impact
-- {data created/updated/deleted}
+## 数据与存储影响
+- {会创建/更新/删除的数据与路径}
 
-## Permissions and Risks
-- {auth, safety, or destructive actions}
+## 权限与风险
+- {认证、权限、破坏性操作或安全风险}
 
-## Observability
-- {logs/metrics/events if relevant}
+## 可观测性
+- {关键日志、事件或指标}
 
-## Test and Verification
-- {how to verify or test}
+## 测试与验证
+- {最小可复现的验证步骤或测试命令}
 
-## Related Changes
-- {PRs, issues, or design links}
+## 相关变更
+- {PR、Issue、设计文档链接}

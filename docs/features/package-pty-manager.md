@@ -1,29 +1,29 @@
-# Package: pty-manager
+# Node 包：pty-manager
 
-## Summary
-Node PTY wrapper used to spawn and manage terminal processes (deprecated).
+## 概述
+用于启动和管理终端进程的 Node PTY 封装（已弃用）。
 
-## Entry Points
-- UI: N/A
-- API: NPM package `@opencode-vibe/pty-manager`
-- CLI: N/A
+## 入口
+- UI：无
+- API：NPM 包 `@opencode-vibe/pty-manager`
+- CLI：无
 
-## Behavior and Boundaries
-- Spawns PTY processes and provides basic I/O helpers.
-- Windows uses `useConpty = false` for compatibility.
-- Deprecated and retained for compatibility (per root README).
+## 行为与边界
+- 提供 PTY 进程启动与基础 I/O 操作能力。
+- Windows 下使用 `useConpty = false` 以提升兼容性。
+- 该模块已弃用，当前仅为兼容历史链路而保留（与根 README 说明一致）。
 
-## Data and Storage Impact
-- None.
+## 数据与存储影响
+- 无。
 
-## Permissions and Risks
-- Spawns local processes; requires appropriate OS permissions.
+## 权限与风险
+- 会启动本地进程，需要操作系统允许相关权限。
 
-## Observability
-- None.
+## 可观测性
+- 无。
 
-## Test and Verification
-- Run `pnpm --filter @opencode-vibe/pty-manager test`.
+## 测试与验证
+- 执行 `pnpm --filter @opencode-vibe/pty-manager test`。
 
-## Related Changes
-- Referenced by `packages/server` dependencies.
+## 相关变更
+- 在 `packages/server` 的依赖中被引用。

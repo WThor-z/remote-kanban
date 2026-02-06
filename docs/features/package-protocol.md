@@ -1,29 +1,29 @@
-# Package: protocol
+# Node 包：protocol
 
-## Summary
-Shared TypeScript types and parsers for kanban events and agent output messages.
+## 概述
+提供看板事件与 Agent 输出消息的共享 TypeScript 类型与解析工具。
 
-## Entry Points
-- UI: N/A
-- API: NPM package `@opencode-vibe/protocol`
-- CLI: N/A
+## 入口
+- UI：无
+- API：NPM 包 `@opencode-vibe/protocol`
+- CLI：无
 
-## Behavior and Boundaries
-- Exports kanban event types, agent types, and execution helpers.
-- Provides a simple message parser for agent output streams.
-- Does not perform network I/O or persistence.
+## 行为与边界
+- 导出看板事件类型、Agent 类型与执行相关辅助类型。
+- 提供基础的 Agent 输出消息解析能力。
+- 不负责网络 I/O，也不负责数据持久化。
 
-## Data and Storage Impact
-- None.
+## 数据与存储影响
+- 无。
 
-## Permissions and Risks
-- None.
+## 权限与风险
+- 无。
 
-## Observability
-- None.
+## 可观测性
+- 无。
 
-## Test and Verification
-- Run `pnpm --filter @opencode-vibe/protocol test`.
+## 测试与验证
+- 执行 `pnpm --filter @opencode-vibe/protocol test`。
 
-## Related Changes
-- Used by `packages/client` and `packages/server`.
+## 相关变更
+- 被 `packages/client` 与 `packages/server` 依赖。

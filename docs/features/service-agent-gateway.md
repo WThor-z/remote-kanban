@@ -1,31 +1,31 @@
-# Service: agent-gateway
+# 服务：agent-gateway
 
-## Summary
-Remote gateway service that connects to the server via WebSocket and executes tasks using OpenCode.
+## 概述
+远程执行网关服务，通过 WebSocket 连接中心服务端，并使用 OpenCode 执行任务。
 
-## Entry Points
-- UI: N/A
-- API: WebSocket to `${GATEWAY_SERVER_URL}/agent/ws?hostId=...` with `Authorization: Bearer $GATEWAY_AUTH_TOKEN`
-- CLI: `pnpm --filter @vk/agent-gateway dev`
+## 入口
+- UI：无
+- API：通过 `${GATEWAY_SERVER_URL}/agent/ws?hostId=...` 建立 WebSocket，需携带 `Authorization: Bearer $GATEWAY_AUTH_TOKEN`
+- CLI：`pnpm --filter @vk/agent-gateway dev`
 
-## Behavior and Boundaries
-- Registers host capabilities and handles `registered`/`ping` messages.
-- Listens for `task:*` commands and `models:request`.
-- Executes tasks via the OpenCode SDK and streams events back to the server.
-- Always starts an embedded OpenCode server (port configurable via `OPENCODE_PORT`).
+## 行为与边界
+- 注册主机能力并处理 `registered` / `ping` 消息。
+- 监听 `task:*` 与 `models:request` 指令。
+- 通过 OpenCode SDK 执行任务并回传流式事件。
+- 总是启动内嵌 OpenCode 服务（端口可由 `OPENCODE_PORT` 配置）。
 
-## Data and Storage Impact
-- Writes work artifacts in the configured working directory (cwd).
+## 数据与存储影响
+- 在配置的工作目录（cwd）写入执行产物。
 
-## Permissions and Risks
-- Executes commands and file changes on the gateway host.
-- Requires valid OpenCode CLI/SDK installation and network access to the server.
+## 权限与风险
+- 会在网关主机执行命令并修改文件。
+- 依赖可用的 OpenCode CLI/SDK 以及到服务端的网络连通性。
 
-## Observability
-- Emits gateway task events (`task:started`, `task:event`, `task:completed`, `task:failed`).
+## 可观测性
+- 发出网关任务事件（`task:started`、`task:event`、`task:completed`、`task:failed`）。
 
-## Test and Verification
-- Run `pnpm --filter @vk/agent-gateway test`.
+## 测试与验证
+- 执行 `pnpm --filter @vk/agent-gateway test`。
 
-## Related Changes
-- Protocol types in `crates/api-server/src/gateway/protocol.rs`.
+## 相关变更
+- 协议定义见 `crates/api-server/src/gateway/protocol.rs`。
