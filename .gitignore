@@ -53,5 +53,8 @@ packages/*/.opencode/
 # Vibe Kanban 数据目录
 .vk-data/
 
+# 本地计划文档
+docs/plans/
+
 # Windows 临时文件
 nul
