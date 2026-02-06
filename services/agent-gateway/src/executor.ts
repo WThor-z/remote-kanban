@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
+import path from 'path';
 import { createOpencodeClient } from '@opencode-ai/sdk';
 import type { TaskRequest, GatewayAgentEvent, TaskResult, ProviderInfo, ModelInfo } from './types.js';
 
@@ -8,6 +9,8 @@ export interface ExecutorOptions {
   defaultAgent: string;
   /** OpenCode server port (will start server if not provided) */
   serverPort?: number;
+  /** Allowed project roots for task cwd validation */
+  allowedRoots?: string[];
 }
 
 interface ActiveTask {
@@ -24,9 +27,27 @@ export class TaskExecutor extends EventEmitter {
   private serverProcess: ChildProcess | null = null;
   private serverUrl: string | null = null;
   private initPromise: Promise<void> | null = null;
+  private allowedRoots: string[];
 
   constructor(private options: ExecutorOptions) {
     super();
+    this.allowedRoots = (options.allowedRoots || []).map((root) => this.normalizePath(root));
+  }
+
+  private normalizePath(input: string): string {
+    const normalized = path.resolve(input);
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  }
+
+  private isCwdAllowed(cwd: string): boolean {
+    if (this.allowedRoots.length === 0) {
+      return true;
+    }
+
+    const normalizedCwd = this.normalizePath(cwd);
+    return this.allowedRoots.some((root) => {
+      return normalizedCwd === root || normalizedCwd.startsWith(`${root}${path.sep}`);
+    });
   }
 
   /**
@@ -160,6 +181,21 @@ export class TaskExecutor extends EventEmitter {
 
   async execute(task: TaskRequest): Promise<TaskResult> {
     const startTime = Date.now();
+
+    if (!this.isCwdAllowed(task.cwd)) {
+      const allowed = this.allowedRoots.join(', ');
+      const message = `Task cwd is outside allowed project roots: ${task.cwd} (allowed: ${allowed})`;
+      this.emitEvent(task.taskId, {
+        type: 'error',
+        content: `[executor] ${message}`,
+        timestamp: Date.now(),
+      });
+      return {
+        success: false,
+        output: message,
+        duration: Date.now() - startTime,
+      };
+    }
     
     try {
       await this.ensureInitialized();

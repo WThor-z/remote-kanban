@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { GatewayAgentEvent } from './types.js';
 import { EventEmitter } from 'events';
+import path from 'path';
 
 // Create mock functions that will be shared - use vi.hoisted for proper hoisting
 const { mockSession, mockEvent, mockClient, mockCreateOpencodeClient, mockSpawn } = vi.hoisted(() => {
   const mockSession = {
     create: vi.fn(),
     prompt: vi.fn(),
+    promptAsync: vi.fn(),
     messages: vi.fn(),
     abort: vi.fn(),
     list: vi.fn(),
@@ -81,6 +83,9 @@ describe('TaskExecutor (SDK Mode)', () => {
     mockSession.prompt.mockResolvedValue({
       data: { info: { id: 'msg-1' }, parts: [{ type: 'text', text: 'Hello!' }] },
     });
+    mockSession.promptAsync.mockResolvedValue({
+      data: { info: { id: 'msg-1' }, parts: [{ type: 'text', text: 'Hello!' }] },
+    });
     mockSession.messages.mockResolvedValue({
       data: [{ parts: [{ type: 'text', text: 'Response' }] }],
     });
@@ -142,7 +147,7 @@ describe('TaskExecutor (SDK Mode)', () => {
       expect(result.success).toBe(true);
       expect(result.duration).toBeDefined();
       expect(mockSession.create).toHaveBeenCalled();
-      expect(mockSession.prompt).toHaveBeenCalled();
+      expect(mockSession.promptAsync).toHaveBeenCalled();
     });
 
     it('should return failure when session creation fails', async () => {
@@ -177,7 +182,7 @@ describe('TaskExecutor (SDK Mode)', () => {
       });
 
       // Verify prompt was called with parsed model
-      expect(mockSession.prompt).toHaveBeenCalledWith(
+      expect(mockSession.promptAsync).toHaveBeenCalledWith(
         expect.objectContaining({
           body: expect.objectContaining({
             model: { providerID: 'anthropic', modelID: 'claude-3-sonnet' },
@@ -198,7 +203,7 @@ describe('TaskExecutor (SDK Mode)', () => {
         timeout: 5000,
       });
 
-      expect(mockSession.prompt).toHaveBeenCalledWith(
+      expect(mockSession.promptAsync).toHaveBeenCalledWith(
         expect.objectContaining({
           body: expect.objectContaining({
             model: { providerID: 'google', modelID: 'gemini-2.0-flash-preview' },
@@ -243,6 +248,46 @@ describe('TaskExecutor (SDK Mode)', () => {
       expect(mockCreateOpencodeClient).toHaveBeenCalledWith({
         baseUrl: 'http://127.0.0.1:9999',
       });
+    });
+
+    it('should reject cwd outside allowlist', async () => {
+      const safeRoot = path.join(process.cwd(), 'projects');
+      executor = new TaskExecutor({
+        defaultCwd: process.cwd(),
+        defaultAgent: 'opencode',
+        allowedRoots: [safeRoot],
+      });
+
+      const result = await executor.execute({
+        taskId: 'blocked-cwd',
+        prompt: 'test',
+        cwd: path.join(process.cwd(), 'outside'),
+        agentType: 'opencode',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.output).toContain('outside allowed project roots');
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it('should allow cwd inside allowlist', async () => {
+      simulateServerStart();
+      const safeRoot = path.join(process.cwd(), 'projects');
+      executor = new TaskExecutor({
+        defaultCwd: process.cwd(),
+        defaultAgent: 'opencode',
+        allowedRoots: [safeRoot],
+      });
+
+      const result = await executor.execute({
+        taskId: 'allowed-cwd',
+        prompt: 'test',
+        cwd: path.join(safeRoot, 'repo-a'),
+        agentType: 'opencode',
+      });
+
+      expect(result.success).toBe(true);
+      expect(mockSpawn).toHaveBeenCalled();
     });
   });
 

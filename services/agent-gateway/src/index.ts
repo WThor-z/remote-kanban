@@ -9,6 +9,17 @@ import { GatewayConnection } from './connection.js';
 import { TaskExecutor } from './executor.js';
 import type { ServerToGatewayMessage, TaskRequest } from './types.js';
 
+const parseAllowedProjectRoots = (): string[] => {
+  const raw = process.env.GATEWAY_ALLOWED_PROJECT_ROOTS;
+  if (!raw) {
+    return [];
+  }
+  return raw
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+};
+
 // Configuration from environment variables
 const config = {
   serverUrl: process.env.GATEWAY_SERVER_URL || 'ws://localhost:3001',
@@ -20,6 +31,7 @@ const config = {
     maxConcurrent: parseInt(process.env.GATEWAY_MAX_CONCURRENT || '2'),
     cwd: process.env.GATEWAY_CWD || process.cwd(),
   },
+  allowedProjectRoots: parseAllowedProjectRoots(),
 };
 
 // Create connection
@@ -36,6 +48,7 @@ const executor = new TaskExecutor({
   defaultCwd: config.capabilities.cwd,
   defaultAgent: 'opencode',
   serverPort: parseInt(process.env.OPENCODE_PORT || '0'), // 0 = 随机端口
+  allowedRoots: config.allowedProjectRoots,
 });
 
 // Forward executor events to server
@@ -83,6 +96,22 @@ async function handleTaskExecute(task: TaskRequest): Promise<void> {
 
   try {
     const result = await executor.execute(task);
+
+    if (!result.success) {
+      const errorMessage = result.output || 'Task execution rejected';
+      console.error(`[Gateway] Task ${task.taskId} rejected: ${errorMessage}`);
+      connection.send({
+        type: 'task:failed',
+        taskId: task.taskId,
+        error: errorMessage,
+        details: {
+          code: 'CWD_NOT_ALLOWED',
+          cwd: task.cwd,
+        },
+      });
+      return;
+    }
+
     console.log(`[Gateway] Task ${task.taskId} completed with exit code: ${result.exitCode}`);
     
     connection.send({
@@ -142,6 +171,9 @@ console.log('[Gateway] Starting Agent Gateway (SDK mode)...');
 console.log(`[Gateway] Server: ${config.serverUrl}`);
 console.log(`[Gateway] Host ID: ${config.hostId}`);
 console.log(`[Gateway] Capabilities:`, config.capabilities);
+if (config.allowedProjectRoots.length > 0) {
+  console.log(`[Gateway] Allowed project roots: ${config.allowedProjectRoots.join(', ')}`);
+}
 
 connection.connect().catch((err) => {
   console.error('[Gateway] Failed to connect:', err.message);
