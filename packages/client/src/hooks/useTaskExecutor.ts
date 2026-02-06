@@ -35,8 +35,6 @@ export interface SessionSummary {
 export interface StartExecutionRequest {
   agentType: AgentType;
   baseBranch: string;
-  /** Target host for remote execution (optional) */
-  targetHost?: string;
   /** Model to use (format: provider/model) */
   model?: string;
 }
@@ -80,7 +78,6 @@ export function useTaskExecutor(): UseTaskExecutorResult {
       console.log('[useTaskExecutor] Starting execution:', {
         taskId,
         request,
-        targetHost: request.targetHost,
         model: request.model,
       });
       

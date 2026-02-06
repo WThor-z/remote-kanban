@@ -88,7 +88,6 @@ function App() {
   // Handle task creation and immediate execution
   const handleCreateAndStartTask = useCallback(async (data: CreateTaskRequest): Promise<boolean> => {
     console.log('[App] handleCreateAndStartTask called with data:', data);
-    console.log('[App] data.targetHost:', data.targetHost);
     console.log('[App] data.model:', data.model);
     
     const task = await createTask(data);
@@ -97,11 +96,10 @@ function App() {
       // Request sync to refresh kanban board
       requestSync();
       
-      // Start execution with model and targetHost from the create request
+      // Start execution with task-configured agent/model settings
       const executeRequest = {
         agentType: (data.agentType || 'opencode') as AgentType,
         baseBranch: data.baseBranch || 'main',
-        targetHost: data.targetHost,
         model: data.model,
       };
       console.log('[App] Calling startExecution with:', executeRequest);
@@ -156,7 +154,6 @@ function App() {
         agentType: agentType as AgentType,
         baseBranch,
         model,
-        // Note: targetHost is not saved on the task, so we let the backend auto-select
       });
       if (result) {
         await getExecutionStatus(taskId);

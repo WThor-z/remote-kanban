@@ -15,6 +15,7 @@ export type TaskPriority = 'low' | 'medium' | 'high';
 
 export interface Task {
   id: string;
+  projectId: string | null;
   title: string;
   description: string | null;
   status: TaskStatus;
@@ -28,12 +29,11 @@ export interface Task {
 
 export interface CreateTaskRequest {
   title: string;
+  projectId: string;
   description?: string;
   priority?: TaskPriority;
   agentType?: AgentType;
   baseBranch?: string;
-  /** Target host for execution (undefined = auto select) */
-  targetHost?: string;
   /** Model to use for execution (format: provider/model) */
   model?: string;
 }
