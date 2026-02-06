@@ -140,6 +140,7 @@ impl GatewayManager {
     /// Dispatch a task to an available host
     pub async fn dispatch_task(&self, task: GatewayTaskRequest) -> Result<String, String> {
         let mut connections = self.connections.write().await;
+        let task_id = task.task_id.clone();
 
         // Find a suitable host
         let host = connections
@@ -148,20 +149,56 @@ impl GatewayManager {
             .ok_or_else(|| format!("No available host for agent type: {}", task.agent_type))?;
 
         let host_id = host.host_id.clone();
-        host.active_tasks.push(task.task_id.clone());
+        host.active_tasks.push(task_id.clone());
 
         // Send task to gateway
         if let Err(e) = host.tx.send(ServerToGatewayMessage::TaskExecute { task }).await {
             error!("Failed to send task to host {}: {}", host_id, e);
             // Remove from active tasks since send failed
             if let Some(conn) = connections.get_mut(&host_id) {
-                conn.active_tasks.retain(|id| id != &host_id);
+                conn.active_tasks.retain(|id| id != &task_id);
             }
             return Err(format!("Failed to dispatch task: {}", e));
         }
 
         info!("Task dispatched to host {}", host_id);
         Ok(host_id)
+    }
+
+    /// Dispatch a task to a specific host.
+    pub async fn dispatch_task_to_host(
+        &self,
+        host_id: &str,
+        task: GatewayTaskRequest,
+    ) -> Result<String, String> {
+        let mut connections = self.connections.write().await;
+        let task_id = task.task_id.clone();
+
+        let conn = connections
+            .get_mut(host_id)
+            .ok_or_else(|| format!("Host {} not found", host_id))?;
+
+        if !conn.capabilities.agents.contains(&task.agent_type) {
+            return Err(format!(
+                "Host {} does not support agent type: {}",
+                host_id, task.agent_type
+            ));
+        }
+
+        if (conn.active_tasks.len() as u32) >= conn.capabilities.max_concurrent {
+            return Err(format!("Host {} is offline or busy", host_id));
+        }
+
+        conn.active_tasks.push(task_id.clone());
+
+        if let Err(e) = conn.tx.send(ServerToGatewayMessage::TaskExecute { task }).await {
+            error!("Failed to send task to host {}: {}", host_id, e);
+            conn.active_tasks.retain(|id| id != &task_id);
+            return Err(format!("Failed to dispatch task: {}", e));
+        }
+
+        info!("Task dispatched to host {}", host_id);
+        Ok(host_id.to_string())
     }
 
     /// Handle task started event from gateway
@@ -599,6 +636,56 @@ mod tests {
 
         let result = manager.dispatch_task(task).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_task_to_host_success() {
+        let manager = GatewayManager::new();
+        let (tx, mut rx) = mpsc::channel(10);
+
+        manager
+            .register_host("host-1".to_string(), create_test_capabilities(), tx)
+            .await;
+
+        let task = GatewayTaskRequest {
+            task_id: "task-1".to_string(),
+            prompt: "test prompt".to_string(),
+            cwd: "/tmp/project".to_string(),
+            agent_type: "opencode".to_string(),
+            model: None,
+            env: HashMap::new(),
+            timeout: None,
+            metadata: serde_json::Value::Null,
+        };
+
+        let result = manager.dispatch_task_to_host("host-1", task).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "host-1");
+
+        let msg = rx.recv().await;
+        assert!(matches!(msg, Some(ServerToGatewayMessage::TaskExecute { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_task_to_host_not_found() {
+        let manager = GatewayManager::new();
+
+        let task = GatewayTaskRequest {
+            task_id: "task-1".to_string(),
+            prompt: "test prompt".to_string(),
+            cwd: "/tmp/project".to_string(),
+            agent_type: "opencode".to_string(),
+            model: None,
+            env: HashMap::new(),
+            timeout: None,
+            metadata: serde_json::Value::Null,
+        };
+
+        let err = manager
+            .dispatch_task_to_host("missing-host", task)
+            .await
+            .unwrap_err();
+        assert!(err.contains("not found"));
     }
 
     #[tokio::test]

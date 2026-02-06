@@ -12,9 +12,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use agent_runner::{AgentType, ChatMessage, ExecuteRequest, MessageRole, Run, SessionState};
+use agent_runner::{AgentType, ChatMessage, MessageRole, Run, SessionState};
 use vk_core::kanban::KanbanTaskStatus;
-use vk_core::task::{TaskRepository, TaskStatus};
+use vk_core::task::TaskRepository;
 
 use crate::gateway::protocol::GatewayTaskRequest;
 use crate::state::AppState;
@@ -117,6 +117,24 @@ async fn start_execution(
             )
         })?;
 
+    let project_id = task.project_id.ok_or_else(|| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ErrorResponse {
+                error: "Project is required".to_string(),
+            }),
+        )
+    })?;
+
+    let project = state.project_store().get(project_id).await.ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Project {} not found", project_id),
+            }),
+        )
+    })?;
+
     // Build prompt from task
     let prompt = if let Some(desc) = &task.description {
         format!("{}\n\n{}", task.title, desc)
@@ -124,28 +142,30 @@ async fn start_execution(
         task.title.clone()
     };
 
-    // Check if we should dispatch to a remote Gateway
+    let base_branch = task
+        .base_branch
+        .clone()
+        .unwrap_or_else(|| project.default_branch.clone());
+
     if let Some(target_host) = &req.target_host {
-        return dispatch_to_gateway(&state, task_id, &prompt, &req.agent_type, target_host, req.model.as_deref()).await;
+        tracing::info!(
+            "Ignoring requested target_host={} for task {} because execution is project-bound",
+            target_host,
+            task_id
+        );
     }
 
-    // Otherwise, try to auto-select a gateway or fall back to local execution
-    let gateway_manager = state.gateway_manager();
-    let hosts = gateway_manager.list_hosts().await;
-    
-    // Check if there's an available gateway host for this agent type
-    let available_host = hosts.iter().find(|h| {
-        h.capabilities.agents.contains(&req.agent_type) 
-            && h.status == crate::gateway::protocol::HostConnectionStatus::Online
-    });
-
-    if let Some(host) = available_host {
-        tracing::info!("Auto-selecting gateway host {} for task {}", host.host_id, task_id);
-        return dispatch_to_gateway(&state, task_id, &prompt, &req.agent_type, &host.host_id, req.model.as_deref()).await;
-    }
-
-    // Fall back to local execution
-    execute_locally(state, task_id, req.agent_type, req.base_branch, prompt).await
+    dispatch_to_gateway(
+        &state,
+        task_id,
+        &prompt,
+        &req.agent_type,
+        &project.gateway_id.to_string(),
+        &project.local_path,
+        req.model.as_deref(),
+        &base_branch,
+    )
+    .await
 }
 
 /// Dispatch task to a remote Gateway host
@@ -154,17 +174,17 @@ async fn dispatch_to_gateway(
     task_id: Uuid,
     prompt: &str,
     agent_type: &str,
-    _target_host: &str,
+    target_host: &str,
+    cwd: &str,
     model: Option<&str>,
+    base_branch: &str,
 ) -> Result<(StatusCode, Json<ExecutionResponse>), (StatusCode, Json<ErrorResponse>)> {
     let gateway_manager = state.gateway_manager();
-    
-    // 不发送 CWD，让 Gateway 使用自己配置的工作目录
-    // 这样可以避免与本地 OpenCode 实例的锁文件冲突
+
     let gateway_task = GatewayTaskRequest {
         task_id: task_id.to_string(),
         prompt: prompt.to_string(),
-        cwd: String::new(),  // 空字符串，让 Gateway 使用自己的 defaultCwd
+        cwd: cwd.to_string(),
         agent_type: agent_type.to_string(),
         model: model.map(String::from),
         env: HashMap::new(),
@@ -172,7 +192,10 @@ async fn dispatch_to_gateway(
         metadata: serde_json::Value::Null,
     };
 
-    match gateway_manager.dispatch_task(gateway_task).await {
+    match gateway_manager
+        .dispatch_task_to_host(target_host, gateway_task)
+        .await
+    {
         Ok(host_id) => {
             tracing::info!("Task {} dispatched to gateway host {}", task_id, host_id);
             
@@ -184,7 +207,7 @@ async fn dispatch_to_gateway(
                 task_id,
                 parsed_agent_type,
                 prompt.to_string(),
-                "main".to_string(), // Gateway doesn't use worktrees, use default branch
+                base_branch.to_string(),
             );
             // Override the generated ID to use our run_id
             run.id = run_id;
@@ -202,6 +225,7 @@ async fn dispatch_to_gateway(
             let task_id_str = task_id.to_string();
             let prompt_clone = prompt.to_string();
             let agent_type_clone = parsed_agent_type;
+            let base_branch = base_branch.to_string();
             tokio::spawn(async move {
                 let mut event_rx = state_clone.gateway_manager().subscribe();
                 let io = state_clone.get_socket_io().await;
@@ -290,7 +314,7 @@ async fn dispatch_to_gateway(
                                         task_id,
                                         agent_type_clone,
                                         prompt_clone.clone(),
-                                        "main".to_string(),
+                                        base_branch.clone(),
                                     );
                                     run.id = run_id;
                                     run.mark_started();
@@ -367,7 +391,7 @@ async fn dispatch_to_gateway(
                                         task_id,
                                         agent_type_clone,
                                         prompt_clone.clone(),
-                                        "main".to_string(),
+                                        base_branch.clone(),
                                     );
                                     run.id = run_id;
                                     run.mark_started();
@@ -470,195 +494,19 @@ async fn dispatch_to_gateway(
         }
         Err(e) => {
             tracing::error!("Failed to dispatch task to gateway: {}", e);
+            let status = if e.starts_with("Host") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::SERVICE_UNAVAILABLE
+            };
             Err((
-                StatusCode::SERVICE_UNAVAILABLE,
+                status,
                 Json(ErrorResponse {
                     error: format!("Gateway dispatch failed: {}", e),
                 }),
             ))
         }
     }
-}
-
-/// Execute task locally using the built-in executor
-async fn execute_locally(
-    state: AppState,
-    task_id: Uuid,
-    agent_type: String,
-    base_branch: String,
-    prompt: String,
-) -> Result<(StatusCode, Json<ExecutionResponse>), (StatusCode, Json<ErrorResponse>)> {
-    // Create execute request
-    let execute_req = ExecuteRequest {
-        task_id,
-        agent_type,
-        base_branch,
-        prompt,
-    };
-
-    // Start execution
-    let (session_id, mut event_rx) = state.executor().execute(execute_req).await.map_err(|e| {
-        tracing::error!("Failed to start execution: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
-
-    // Spawn event bridge to Socket.IO
-    let state_clone = state.clone();
-    tokio::spawn(async move {
-        let io = state_clone.get_socket_io().await;
-        if let Some(io) = io {
-            while let Some(event) = event_rx.recv().await {
-                // Emit structured event
-                // We emit to all clients. In production, we should emit to a room "task:{task_id}"
-                let _ = io.emit("task:execution_event", &event);
-                
-                // Compatibility mapping for existing UI components
-                match &event.event {
-                    agent_runner::ExecutionEventType::StatusChanged { new_status, .. } => {
-                        let status_str = match new_status {
-                            agent_runner::ExecutionStatus::Initializing |
-                            agent_runner::ExecutionStatus::CreatingWorktree |
-                            agent_runner::ExecutionStatus::Starting => "starting",
-                            agent_runner::ExecutionStatus::Running |
-                            agent_runner::ExecutionStatus::CleaningUp => "running",
-                            agent_runner::ExecutionStatus::Paused => "paused",
-                            agent_runner::ExecutionStatus::Completed => "completed",
-                            agent_runner::ExecutionStatus::Failed => "failed",
-                            agent_runner::ExecutionStatus::Cancelled => "aborted",
-                        };
-                        
-                        #[derive(Serialize)]
-                        struct StatusPayload {
-                            #[serde(rename = "taskId")]
-                            task_id: Uuid,
-                            status: String,
-                        }
-                        let _ = io.emit("task:status", &StatusPayload {
-                            task_id: event.task_id,
-                            status: status_str.to_string(),
-                        });
-                        
-                        // Update task status in TaskStore based on execution status
-                        let task_status = match new_status {
-                            agent_runner::ExecutionStatus::Running => Some(TaskStatus::InProgress),
-                            agent_runner::ExecutionStatus::Completed => Some(TaskStatus::Done),
-                            agent_runner::ExecutionStatus::Failed |
-                            agent_runner::ExecutionStatus::Cancelled => Some(TaskStatus::Done),
-                            _ => None,
-                        };
-                        
-                        if let Some(new_task_status) = task_status {
-                            // Update TaskStore
-                            let task_store = state_clone.task_store();
-                            if let Ok(Some(mut task)) = task_store.get(event.task_id).await {
-                                task.status = new_task_status;
-                                if let Err(e) = task_store.update(task).await {
-                                    tracing::warn!("Failed to update task status: {}", e);
-                                } else {
-                                    tracing::info!(
-                                        "Task {} status updated to {:?}",
-                                        event.task_id, new_task_status
-                                    );
-                                }
-                            }
-                            
-                            // Update KanbanStore (this is what the UI actually reads)
-                            let kanban_status = match new_task_status {
-                                TaskStatus::InProgress => KanbanTaskStatus::Doing,
-                                TaskStatus::Done => KanbanTaskStatus::Done,
-                                TaskStatus::InReview => KanbanTaskStatus::Doing,
-                                TaskStatus::Todo => KanbanTaskStatus::Todo,
-                            };
-                            
-                            let kanban_store = state_clone.kanban_store();
-                            let task_id_str = event.task_id.to_string();
-                            if let Err(e) = kanban_store.move_task(&task_id_str, kanban_status, None).await {
-                                tracing::warn!("Failed to move kanban task: {}", e);
-                            } else {
-                                tracing::info!(
-                                    "Kanban task {} moved to {:?}",
-                                    event.task_id, kanban_status
-                                );
-                                // Broadcast kanban sync to all clients
-                                let board_state = kanban_store.get_state().await;
-                                let _ = io.emit("kanban:sync", &board_state);
-                            }
-                        }
-                    },
-                    agent_runner::ExecutionEventType::AgentEvent { event: agent_event } => {
-                        match agent_event {
-                            agent_runner::AgentEvent::Message { content } | 
-                            agent_runner::AgentEvent::Thinking { content } |
-                            agent_runner::AgentEvent::Error { message: content, .. } |
-                            agent_runner::AgentEvent::RawOutput { content, .. } => {
-                                // Send as chat message
-                                let role = match agent_event {
-                                    agent_runner::AgentEvent::Thinking { .. } => "system",
-                                    agent_runner::AgentEvent::Error { .. } => "system",
-                                    _ => "assistant",
-                                };
-
-                                let content = match agent_event {
-                                    agent_runner::AgentEvent::Thinking { .. } => format!("💭 {}", content),
-                                    agent_runner::AgentEvent::Error { .. } => format!("❌ Error: {}", content),
-                                    _ => content.clone(),
-                                };
-                                
-                                emit_message(&io, event.task_id, event.id, role, content, event.timestamp.timestamp_millis());
-                            },
-                            agent_runner::AgentEvent::Command { command, output, .. } => {
-                                let content = format!("$ {}\n{}", command, output);
-                                emit_message(&io, event.task_id, event.id, "assistant", content, event.timestamp.timestamp_millis());
-                            },
-                            _ => {}
-                        }
-                    },
-                    _ => {}
-                }
-            }
-        }
-    });
-
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(ExecutionResponse {
-            session_id,
-            task_id,
-            status: "started".to_string(),
-            message: "Execution started successfully".to_string(),
-        }),
-    ))
-}
-
-fn emit_message(io: &socketioxide::SocketIo, task_id: Uuid, id: Uuid, role: &str, content: String, timestamp: i64) {
-    #[derive(Serialize)]
-    struct MessagePayload {
-        #[serde(rename = "taskId")]
-        task_id: Uuid,
-        message: TaskMessage,
-    }
-    #[derive(Serialize)]
-    struct TaskMessage {
-        id: String,
-        role: String,
-        content: String,
-        timestamp: i64,
-    }
-
-    let _ = io.emit("task:message", &MessagePayload {
-        task_id,
-        message: TaskMessage {
-            id: id.to_string(),
-            role: role.to_string(),
-            content,
-            timestamp,
-        }
-    });
 }
 
 /// GET /api/tasks/:id/status - Get execution status
@@ -874,6 +722,66 @@ pub fn router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{collections::HashMap, sync::Arc};
+
+    use axum::{
+        body::{to_bytes, Body},
+        http::Request,
+    };
+    use serde_json::{json, Value};
+    use tempfile::TempDir;
+    use tower::ServiceExt;
+    use vk_core::{
+        kanban::KanbanStore,
+        project::CreateProjectRequest,
+        task::{FileTaskStore, Task},
+    };
+
+    use crate::{
+        gateway::{
+            protocol::{HostCapabilities, ServerToGatewayMessage},
+            GatewayManager,
+        },
+        state::AppState,
+    };
+
+    async fn build_state() -> (AppState, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let data_dir = temp_dir.path().to_path_buf();
+
+        let tasks_path = data_dir.join("tasks.json");
+        let task_store = Arc::new(FileTaskStore::new(tasks_path).await.unwrap());
+        let kanban_path = data_dir.join("kanban.json");
+        let kanban_store = Arc::new(
+            KanbanStore::with_task_store(kanban_path, Arc::clone(&task_store))
+                .await
+                .unwrap(),
+        );
+        let gateway_manager = Arc::new(GatewayManager::with_stores(
+            Arc::clone(&task_store),
+            Arc::clone(&kanban_store),
+        ));
+        let state = AppState::with_stores(
+            data_dir,
+            Arc::clone(&task_store),
+            Arc::clone(&kanban_store),
+            Arc::clone(&gateway_manager),
+        )
+        .await
+        .unwrap();
+
+        (state, temp_dir)
+    }
+
+    fn execution_body() -> Body {
+        Body::from(
+            json!({
+                "agentType": "opencode",
+                "baseBranch": "main"
+            })
+            .to_string(),
+        )
+    }
 
     #[test]
     fn start_execution_request_deserializes_camel_case() {
@@ -884,5 +792,160 @@ mod tests {
         let req: StartExecutionRequest = serde_json::from_value(value).expect("valid payload");
         assert_eq!(req.agent_type, "opencode");
         assert_eq!(req.base_branch, "main");
+    }
+
+    #[tokio::test]
+    async fn start_execution_without_project_id_returns_unprocessable_entity() {
+        let (state, _temp_dir) = build_state().await;
+        let task = state
+            .task_store()
+            .create(Task::new("No project".to_string()))
+            .await
+            .unwrap();
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/tasks/{}/execute", task.id))
+                    .header("Content-Type", "application/json")
+                    .body(execution_body())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error"], "Project is required");
+    }
+
+    #[tokio::test]
+    async fn start_execution_with_missing_project_returns_not_found() {
+        let (state, _temp_dir) = build_state().await;
+        let task = state
+            .task_store()
+            .create(Task::new("Unknown project".to_string()).with_project_id(Uuid::new_v4()))
+            .await
+            .unwrap();
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/tasks/{}/execute", task.id))
+                    .header("Content-Type", "application/json")
+                    .body(execution_body())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn start_execution_with_offline_project_host_returns_conflict() {
+        let (state, _temp_dir) = build_state().await;
+        let project = state
+            .project_store()
+            .register(
+                Uuid::new_v4(),
+                CreateProjectRequest {
+                    name: "offline-project".to_string(),
+                    local_path: "/tmp/offline-project".to_string(),
+                    remote_url: None,
+                    default_branch: None,
+                    worktree_dir: None,
+                },
+            )
+            .await
+            .unwrap();
+        let task = state
+            .task_store()
+            .create(Task::new("Offline host".to_string()).with_project_id(project.id))
+            .await
+            .unwrap();
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/tasks/{}/execute", task.id))
+                    .header("Content-Type", "application/json")
+                    .body(execution_body())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn start_execution_dispatches_project_cwd_to_bound_host() {
+        let (state, _temp_dir) = build_state().await;
+        let project = state
+            .project_store()
+            .register(
+                Uuid::new_v4(),
+                CreateProjectRequest {
+                    name: "bound-project".to_string(),
+                    local_path: "/tmp/bound-project".to_string(),
+                    remote_url: None,
+                    default_branch: Some("develop".to_string()),
+                    worktree_dir: None,
+                },
+            )
+            .await
+            .unwrap();
+        let task = state
+            .task_store()
+            .create(Task::new("Dispatch cwd".to_string()).with_project_id(project.id))
+            .await
+            .unwrap();
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        state
+            .gateway_manager()
+            .register_host(
+                project.gateway_id.to_string(),
+                HostCapabilities {
+                    name: "Bound host".to_string(),
+                    agents: vec!["opencode".to_string()],
+                    max_concurrent: 2,
+                    cwd: "/tmp".to_string(),
+                    labels: HashMap::new(),
+                },
+                tx,
+            )
+            .await;
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/tasks/{}/execute", task.id))
+                    .header("Content-Type", "application/json")
+                    .body(execution_body())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let msg = rx.recv().await.unwrap();
+        match msg {
+            ServerToGatewayMessage::TaskExecute { task } => {
+                assert_eq!(task.cwd, project.local_path);
+            }
+            _ => panic!("expected task dispatch message"),
+        }
     }
 }
