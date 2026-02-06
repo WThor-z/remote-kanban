@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { resolveApiBaseUrl } from '../config/endpoints';
-import type { ConflictStrategy, GitStatus, MergeStrategy } from './useTaskApi';
+import type { ConflictStrategy, GitStatus, MergeStrategy } from './useProjects';
 
 export interface GitStatusResponse {
   taskId: string;

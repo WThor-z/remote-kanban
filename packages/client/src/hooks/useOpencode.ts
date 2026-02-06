@@ -6,6 +6,17 @@ let socket: Socket | undefined;
 let socketUrl: string | undefined;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
+export const __resetOpencodeSocketForTests = () => {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+  }
+
+  socket?.disconnect();
+  socket = undefined;
+  socketUrl = undefined;
+};
+
 const resolveSocketUrl = () => resolveGatewaySocketUrl();
 
 const scheduleReconnect = (delayMs: number) => {

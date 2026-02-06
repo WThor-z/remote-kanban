@@ -1,13 +1,13 @@
 const resolveEnvValue = (viteKey: string, nodeKey: string): string | undefined => {
-  if (typeof import.meta !== 'undefined') {
-    const value = (import.meta as { env?: Record<string, string> }).env?.[viteKey];
+  if (typeof process !== 'undefined') {
+    const value = (process as { env?: Record<string, string> }).env?.[nodeKey];
     if (value) {
       return value;
     }
   }
 
-  if (typeof process !== 'undefined') {
-    const value = (process as { env?: Record<string, string> }).env?.[nodeKey];
+  if (typeof import.meta !== 'undefined') {
+    const value = (import.meta as { env?: Record<string, string> }).env?.[viteKey];
     if (value) {
       return value;
     }
