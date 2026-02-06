@@ -61,18 +61,6 @@ impl GatewayManager {
         }
     }
 
-    /// Create a new Gateway Manager with a task store
-    pub fn with_task_store(task_store: Arc<FileTaskStore>) -> Self {
-        let (event_tx, _) = broadcast::channel(1000);
-        Self {
-            connections: Arc::new(RwLock::new(HashMap::new())),
-            event_tx,
-            pending_model_requests: Arc::new(RwLock::new(HashMap::new())),
-            task_store: Some(task_store),
-            kanban_store: None,
-        }
-    }
-
     /// Create a new Gateway Manager with both task store and kanban store
     pub fn with_stores(task_store: Arc<FileTaskStore>, kanban_store: Arc<KanbanStore>) -> Self {
         let (event_tx, _) = broadcast::channel(1000);

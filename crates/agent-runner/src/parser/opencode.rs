@@ -92,7 +92,7 @@ impl OutputParser for OpenCodeParser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{FileAction, OutputStream};
+    use crate::event::OutputStream;
 
     #[test]
     fn test_parse_thinking() {
