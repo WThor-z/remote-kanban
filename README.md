@@ -189,6 +189,19 @@ cd packages/client && pnpm test
 cd packages/server && pnpm test
 ```
 
+### Maintenance Commands
+
+```bash
+# 校验 docs/features 是否都在索引中注册
+pnpm run check:docs:features
+
+# 预览将清理的运行时目录（dry-run）
+pnpm run cleanup:data
+
+# 执行清理（会删除 .vk-data 与 crates/.vk-data 下的 runs/worktrees）
+pnpm run cleanup:data:apply
+```
+
 ## License
 
 MIT

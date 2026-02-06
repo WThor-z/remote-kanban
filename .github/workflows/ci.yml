@@ -36,6 +36,9 @@ jobs:
       - name: Validate feature docs index
         run: pnpm run check:docs:features
 
+      - name: Test repository scripts
+        run: pnpm run test:scripts
+
       - name: Build JS/TS workspace
         run: pnpm -r run build
 
