@@ -13,6 +13,8 @@
 - 监听 `task:*` 与 `models:request` 指令。
 - 通过 OpenCode SDK 执行任务并回传流式事件。
 - 总是启动内嵌 OpenCode 服务（端口可由 `OPENCODE_PORT` 配置）。
+- 支持通过 `GATEWAY_ALLOWED_PROJECT_ROOTS`（逗号分隔）限制可执行任务的 `cwd` 根路径。
+- 当任务 `cwd` 不在允许列表内时，网关会拒绝执行并回传 `task:failed`（`code=CWD_NOT_ALLOWED`）。
 
 ## 数据与存储影响
 - 在配置的工作目录（cwd）写入执行产物。
