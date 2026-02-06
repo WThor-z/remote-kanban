@@ -25,6 +25,8 @@ use crate::state::AppState;
 pub struct CreateTaskRequest {
     pub title: String,
     #[serde(default)]
+    pub project_id: Option<Uuid>,
+    #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
     pub priority: Option<TaskPriority>,
@@ -52,6 +54,7 @@ pub struct UpdateTaskRequest {
 #[serde(rename_all = "camelCase")]
 pub struct TaskResponse {
     pub id: Uuid,
+    pub project_id: Option<Uuid>,
     pub title: String,
     pub description: Option<String>,
     pub status: TaskStatus,
@@ -126,6 +129,7 @@ impl From<Task> for TaskResponse {
     fn from(task: Task) -> Self {
         Self {
             id: task.id,
+            project_id: task.project_id,
             title: task.title,
             description: task.description,
             status: task.status,
@@ -179,7 +183,26 @@ async fn create_task(
         ));
     }
 
-    let mut task = Task::new(req.title);
+    let project_id = req.project_id.ok_or_else(|| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ErrorResponse {
+                error: "Project is required".to_string(),
+            }),
+        )
+    })?;
+
+    let project = state.project_store().get(project_id).await;
+    if project.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Project {} not found", project_id),
+            }),
+        ));
+    }
+
+    let mut task = Task::new(req.title).with_project_id(project_id);
 
     if let Some(desc) = req.description {
         task = task.with_description(desc);
@@ -622,10 +645,12 @@ mod tests {
     use std::sync::Arc;
 
     use agent_runner::{AgentType, Run};
-    use axum::{body::Body, http::Request};
+    use axum::{body::{to_bytes, Body}, http::Request};
+    use serde_json::{json, Value};
     use tempfile::TempDir;
     use tower::ServiceExt;
     use vk_core::kanban::KanbanStore;
+    use vk_core::project::CreateProjectRequest;
     use vk_core::task::FileTaskStore;
 
     use crate::gateway::GatewayManager;
@@ -845,5 +870,99 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn create_task_without_project_id_returns_unprocessable_entity() {
+        let (state, _temp_dir) = build_state().await;
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/tasks")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(json!({ "title": "New task" }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error"], "Project is required");
+    }
+
+    #[tokio::test]
+    async fn create_task_with_missing_project_returns_not_found() {
+        let (state, _temp_dir) = build_state().await;
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/tasks")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "title": "New task",
+                            "projectId": Uuid::new_v4(),
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn create_task_with_valid_project_sets_project_id() {
+        let (state, _temp_dir) = build_state().await;
+        let project = state
+            .project_store()
+            .register(
+                Uuid::new_v4(),
+                CreateProjectRequest {
+                    name: "test-project".to_string(),
+                    local_path: "/tmp/test-project".to_string(),
+                    remote_url: None,
+                    default_branch: None,
+                    worktree_dir: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/tasks")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "title": "New task",
+                            "projectId": project.id,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["projectId"], project.id.to_string());
     }
 }
