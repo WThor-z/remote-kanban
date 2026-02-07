@@ -4,12 +4,12 @@ import { useKanban } from './hooks/useKanban';
 import { useTaskSession } from './hooks/useTaskSession';
 import { useTaskApi, type CreateTaskRequest } from './hooks/useTaskApi';
 import { useTaskExecutor } from './hooks/useTaskExecutor';
-import { Bot, Plus } from 'lucide-react';
-import { InputBar } from './components/InputBar';
+import { Bot, Plus, Server, HardDrive, Plug, RefreshCw } from 'lucide-react';
 import { KanbanBoard } from './components/kanban/KanbanBoard';
-import { AgentPanel } from './components/agent';
 import { TaskDetailPanel, CreateTaskModal } from './components/task';
 import type { KanbanTask, AgentType } from '@opencode-vibe/protocol';
+import { useGatewayInfo } from './hooks/useGatewayInfo';
+import { resolveApiBaseUrl, resolveGatewaySocketUrl } from './config/endpoints';
 
 function App() {
   const { isConnected, socket } = useOpencode();
@@ -17,17 +17,29 @@ function App() {
   const [selectedTask, setSelectedTask] = useState<KanbanTask | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
+  const gatewaySocketUrl = resolveGatewaySocketUrl();
+  const apiBaseUrl = resolveApiBaseUrl();
+  const {
+    info: gatewayInfo,
+    isLoading: gatewayInfoLoading,
+    error: gatewayInfoError,
+    refresh: refreshGatewayInfo,
+  } = useGatewayInfo();
+
   // Rust API hook for task management
   const {
     isLoading: isTaskApiLoading,
     error: taskApiError,
     createTask,
+    getTask,
     clearError: clearTaskApiError,
   } = useTaskApi();
 
   // Task executor hook for isolated worktree execution
   const {
     currentSession,
+    isExecuting,
+    error: executorError,
     startExecution,
     stopExecution: stopIsolatedExecution,
     getExecutionStatus,
@@ -41,7 +53,6 @@ function App() {
     isLoading,
     error,
     selectTask,
-    executeTask,
     stopTask,
     sendMessage,
   } = useTaskSession({ socket, isConnected });
@@ -74,6 +85,36 @@ function App() {
     return false;
   }, [createTask, requestSync]);
 
+  // Handle task creation and immediate execution
+  const handleCreateAndStartTask = useCallback(async (data: CreateTaskRequest): Promise<boolean> => {
+    console.log('[App] handleCreateAndStartTask called with data:', data);
+    console.log('[App] data.model:', data.model);
+    
+    const task = await createTask(data);
+    if (task) {
+      console.log('[App] Task created successfully, starting execution:', task);
+      // Request sync to refresh kanban board
+      requestSync();
+      
+      // Start execution with task-configured agent/model settings
+      const executeRequest = {
+        agentType: (data.agentType || 'opencode') as AgentType,
+        baseBranch: data.baseBranch || 'main',
+        model: data.model,
+      };
+      console.log('[App] Calling startExecution with:', executeRequest);
+      
+      const result = await startExecution(task.id, executeRequest);
+      
+      if (result) {
+        console.log('[App] Task execution started:', result);
+        await getExecutionStatus(task.id);
+        return true;
+      }
+    }
+    return false;
+  }, [createTask, requestSync, startExecution, getExecutionStatus]);
+
   const handleCloseCreateModal = useCallback(() => {
     setIsCreateModalOpen(false);
     clearTaskApiError();
@@ -97,15 +138,28 @@ function App() {
   };
 
   const handleExecuteTask = async (taskId: string) => {
-    const task = board.tasks[taskId];
-    if (task) {
+    // Fetch full task from REST API to get all fields including model
+    // The Kanban board tasks (board.tasks) don't include model/agentType/baseBranch fields
+    const fullTask = await getTask(taskId);
+    
+    if (fullTask) {
       // Start execution in isolated worktree via REST API
-      const agentType = (task as unknown as { agentType?: string }).agentType || 'opencode';
-      const baseBranch = (task as unknown as { baseBranch?: string }).baseBranch || 'main';
-      await startExecution(taskId, {
+      const agentType = fullTask.agentType || 'opencode';
+      const baseBranch = fullTask.baseBranch || 'main';
+      const model = fullTask.model || undefined;
+      
+      console.log('[App] handleExecuteTask:', { taskId, agentType, baseBranch, model });
+      
+      const result = await startExecution(taskId, {
         agentType: agentType as AgentType,
         baseBranch,
+        model,
       });
+      if (result) {
+        await getExecutionStatus(taskId);
+      }
+    } else {
+      console.error('[App] handleExecuteTask: Failed to fetch task from REST API:', taskId);
     }
     // Socket.IO updates will come automatically via task:execution_event
   };
@@ -166,16 +220,57 @@ function App() {
           <span className={`w-2 h-2 rounded-full mr-2 ${
             isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'
           }`}></span>
-          {isConnected ? 'Connected to Server' : 'Disconnected'}
+          {isConnected ? 'Gateway Connected' : 'Gateway Disconnected'}
         </div>
       </div>
 
-      {/* Agent Panel - Primary Interface */}
-      <div className="w-full max-w-6xl">
-        <AgentPanel />
+      {/* Gateway Status */}
+      <div className="w-full max-w-6xl bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+          <div className="flex items-center gap-2 text-slate-200">
+            <Server size={18} className="text-indigo-400" />
+            <span className="font-semibold">Gateway Status</span>
+            {gatewayInfo?.version && (
+              <span className="text-xs text-slate-400">v{gatewayInfo.version}</span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={refreshGatewayInfo}
+            className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-semibold rounded-full bg-slate-700/70 text-slate-200 hover:bg-slate-600"
+          >
+            <RefreshCw size={12} className={gatewayInfoLoading ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+          <div className="bg-slate-900/40 border border-slate-700/60 rounded-lg p-3">
+            <div className="text-xs text-slate-400 mb-1">Socket</div>
+            <div className="text-slate-200 break-all font-mono text-xs">{gatewaySocketUrl}</div>
+          </div>
+          <div className="bg-slate-900/40 border border-slate-700/60 rounded-lg p-3">
+            <div className="text-xs text-slate-400 mb-1">REST API</div>
+            <div className="text-slate-200 break-all font-mono text-xs">{apiBaseUrl}</div>
+          </div>
+          <div className="bg-slate-900/40 border border-slate-700/60 rounded-lg p-3">
+            <div className="flex items-center gap-1 text-xs text-slate-400 mb-1">
+              <Plug size={12} /> Worker
+            </div>
+            <div className="text-slate-200 break-all font-mono text-xs">{gatewayInfo?.workerUrl || 'unknown'}</div>
+          </div>
+          <div className="bg-slate-900/40 border border-slate-700/60 rounded-lg p-3">
+            <div className="flex items-center gap-1 text-xs text-slate-400 mb-1">
+              <HardDrive size={12} /> Data Dir
+            </div>
+            <div className="text-slate-200 break-all font-mono text-xs">{gatewayInfo?.dataDir || 'unknown'}</div>
+          </div>
+        </div>
+        {gatewayInfoError && (
+          <div className="mt-3 text-xs text-rose-400">{gatewayInfoError}</div>
+        )}
       </div>
 
-{/* Kanban Board */}
+      {/* Kanban Board */}
       <div className="w-full max-w-6xl">
         <KanbanBoard 
           board={board} 
@@ -186,16 +281,14 @@ function App() {
         />
       </div>
 
-      <InputBar />
-
       {/* Task Detail Panel (Modal) */}
       {selectedTask && (
         <TaskDetailPanel
           task={selectedTask}
           history={history}
           status={status}
-          isLoading={isLoading}
-          error={error}
+          isLoading={isLoading || isExecuting}
+          error={error || executorError}
           executionInfo={currentSession && currentSession.taskId === selectedTask.id ? {
             sessionId: currentSession.sessionId,
             worktreePath: currentSession.worktreePath,
@@ -216,6 +309,7 @@ function App() {
         isOpen={isCreateModalOpen}
         onClose={handleCloseCreateModal}
         onCreate={handleCreateTask}
+        onCreateAndStart={handleCreateAndStartTask}
         isLoading={isTaskApiLoading}
         error={taskApiError}
       />

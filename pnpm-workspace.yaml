@@ -1,3 +1,6 @@
 packages:
   - 'packages/*'
-  - 'shared/*'
+
+onlyBuiltDependencies:
+  - esbuild
+  - node-pty

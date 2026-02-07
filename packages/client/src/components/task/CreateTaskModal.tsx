@@ -5,10 +5,12 @@
  * Supports creating a task and optionally starting it immediately.
  */
 
-import { useState, useEffect, useCallback } from 'react';
-import { X, Plus, Play, Loader2, AlertCircle, ChevronDown, GitBranch, Bot } from 'lucide-react';
-import type { TaskPriority, CreateTaskRequest } from '../../hooks/useTaskApi';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { X, Plus, Play, Loader2, AlertCircle, ChevronDown, GitBranch, Bot, Cpu, Search, FolderGit2 } from 'lucide-react';
+import type { CreateTaskRequest } from '../../hooks/useTaskApi';
 import type { AgentType } from '@opencode-vibe/protocol';
+import { useModels } from '../../hooks/useModels';
+import { useProjects } from '../../hooks/useProjects';
 
 interface CreateTaskModalProps {
   isOpen: boolean;
@@ -18,12 +20,6 @@ interface CreateTaskModalProps {
   isLoading?: boolean;
   error?: string | null;
 }
-
-const priorityOptions: { value: TaskPriority; label: string; color: string }[] = [
-  { value: 'low', label: 'Low', color: 'text-slate-400' },
-  { value: 'medium', label: 'Medium', color: 'text-amber-400' },
-  { value: 'high', label: 'High', color: 'text-rose-400' },
-];
 
 const agentOptions: { value: AgentType; label: string; description: string }[] = [
   { value: 'opencode', label: 'OpenCode', description: 'SST OpenCode AI Agent' },
@@ -42,21 +38,56 @@ export function CreateTaskModal({
 }: CreateTaskModalProps) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [priority, setPriority] = useState<TaskPriority>('medium');
-  const [isPriorityOpen, setIsPriorityOpen] = useState(false);
   const [agentType, setAgentType] = useState<AgentType>('opencode');
   const [isAgentOpen, setIsAgentOpen] = useState(false);
   const [baseBranch, setBaseBranch] = useState('main');
+  const [projectId, setProjectId] = useState('');
+  const [isProjectOpen, setIsProjectOpen] = useState(false);
+  const [model, setModel] = useState<string>('');
+  const [isModelOpen, setIsModelOpen] = useState(false);
+  const [modelSearch, setModelSearch] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
+
+  const { projects, isLoading: projectsLoading, hasProjects } = useProjects();
+  const selectedProject = projects.find(p => p.id === projectId);
+
+  // Fetch available models for the selected project's bound gateway host
+  const { modelOptions, isLoading: modelsLoading, fetchModels, clearModels } = useModels();
+
+  // Filter models by search term
+  const filteredModelOptions = useMemo(() => {
+    if (!modelSearch.trim()) return modelOptions;
+    const search = modelSearch.toLowerCase();
+    return modelOptions.filter(option => 
+      option.model.name.toLowerCase().includes(search) ||
+      option.provider.toLowerCase().includes(search) ||
+      option.value.toLowerCase().includes(search)
+    );
+  }, [modelOptions, modelSearch]);
+
+  // Fetch models when project changes
+  useEffect(() => {
+    if (selectedProject) {
+      fetchModels(selectedProject.gatewayId);
+    } else {
+      clearModels();
+      setModel('');
+    }
+    setModelSearch('');
+  }, [selectedProject, fetchModels, clearModels]);
 
   // Reset form when modal opens
   useEffect(() => {
     if (isOpen) {
       setTitle('');
       setDescription('');
-      setPriority('medium');
       setAgentType('opencode');
       setBaseBranch('main');
+      setProjectId('');
+      setIsProjectOpen(false);
+      setModel('');
+      setIsModelOpen(false);
+      setModelSearch('');
       setLocalError(null);
     }
   }, [isOpen]);
@@ -77,19 +108,25 @@ export function CreateTaskModal({
       setLocalError('Title is required');
       return false;
     }
+    if (!projectId) {
+      setLocalError('Project is required');
+      return false;
+    }
     setLocalError(null);
     return true;
-  }, [title]);
+  }, [title, projectId]);
 
   const handleCreate = async () => {
     if (!validateForm()) return;
 
     const data: CreateTaskRequest = {
       title: title.trim(),
+      projectId,
       description: description.trim() || undefined,
-      priority,
+      priority: 'medium', // Default priority
       agentType,
       baseBranch: baseBranch.trim() || 'main',
+      model: model || undefined,
     };
 
     const success = await onCreate(data);
@@ -103,10 +140,12 @@ export function CreateTaskModal({
 
     const data: CreateTaskRequest = {
       title: title.trim(),
+      projectId,
       description: description.trim() || undefined,
-      priority,
+      priority: 'medium', // Default priority
       agentType,
       baseBranch: baseBranch.trim() || 'main',
+      model: model || undefined,
     };
 
     const success = await onCreateAndStart(data);
@@ -121,7 +160,6 @@ export function CreateTaskModal({
     }
   };
 
-  const selectedPriority = priorityOptions.find(p => p.value === priority)!;
   const displayError = localError || error;
 
   if (!isOpen) return null;
@@ -191,43 +229,6 @@ export function CreateTaskModal({
             />
           </div>
 
-          {/* Priority */}
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1.5">
-              Priority
-            </label>
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setIsPriorityOpen(!isPriorityOpen)}
-                className="w-full flex items-center justify-between bg-slate-700 border border-slate-600 rounded-lg px-3 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                disabled={isLoading}
-              >
-                <span className={selectedPriority.color}>{selectedPriority.label}</span>
-                <ChevronDown size={16} className={`text-slate-400 transition-transform ${isPriorityOpen ? 'rotate-180' : ''}`} />
-              </button>
-              {isPriorityOpen && (
-                <div className="absolute top-full left-0 right-0 mt-1 bg-slate-700 border border-slate-600 rounded-lg shadow-xl z-10 overflow-hidden">
-                  {priorityOptions.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => {
-                        setPriority(option.value);
-                        setIsPriorityOpen(false);
-                      }}
-                      className={`w-full px-3 py-2.5 text-left hover:bg-slate-600 transition-colors ${option.color} ${
-                        priority === option.value ? 'bg-slate-600' : ''
-                      }`}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
           {/* Agent Type */}
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-1.5">
@@ -283,6 +284,147 @@ export function CreateTaskModal({
               disabled={isLoading}
             />
           </div>
+
+          {/* Project */}
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-1.5">
+              <FolderGit2 size={14} className="inline mr-1.5" />
+              Project <span className="text-rose-400">*</span>
+              {projectsLoading && <span className="text-slate-500 ml-2">(loading...)</span>}
+            </label>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsProjectOpen(!isProjectOpen)}
+                className="w-full flex items-center justify-between bg-slate-700 border border-slate-600 rounded-lg px-3 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                disabled={isLoading}
+              >
+                <span className={selectedProject ? 'text-emerald-400' : 'text-slate-400'}>
+                  {selectedProject ? selectedProject.name : (hasProjects ? 'Select a project' : 'No projects available')}
+                </span>
+                <ChevronDown size={16} className={`text-slate-400 transition-transform ${isProjectOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {isProjectOpen && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-slate-700 border border-slate-600 rounded-lg shadow-xl z-10 overflow-hidden max-h-48 overflow-y-auto">
+                  {projects.length > 0 ? (
+                    projects.map((project) => (
+                      <button
+                        key={project.id}
+                        type="button"
+                        onClick={() => {
+                          setProjectId(project.id);
+                          setIsProjectOpen(false);
+                        }}
+                        className={`w-full px-3 py-2.5 text-left hover:bg-slate-600 transition-colors ${
+                          projectId === project.id ? 'bg-slate-600' : ''
+                        }`}
+                      >
+                        <div className="text-emerald-400">{project.name}</div>
+                        <div className="text-xs text-slate-400 mt-0.5">
+                          {project.localPath} | gateway: {project.gatewayId}
+                        </div>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="px-3 py-2.5 text-slate-500 text-sm">
+                      No projects registered yet
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Model Selector - available after project selection */}
+          {selectedProject && (
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1.5">
+                <Cpu size={14} className="inline mr-1.5" />
+                Model
+                {modelsLoading && <span className="text-slate-500 ml-2">(loading...)</span>}
+              </label>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setIsModelOpen(!isModelOpen)}
+                  className="w-full flex items-center justify-between bg-slate-700 border border-slate-600 rounded-lg px-3 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  disabled={isLoading || modelsLoading}
+                >
+                  <span className={model ? 'text-cyan-400' : 'text-slate-400'}>
+                    {model 
+                      ? (modelOptions.find(m => m.value === model)?.label || model)
+                      : 'Default (auto-select)'}
+                  </span>
+                  <ChevronDown size={16} className={`text-slate-400 transition-transform ${isModelOpen ? 'rotate-180' : ''}`} />
+                </button>
+                {isModelOpen && (
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-slate-700 border border-slate-600 rounded-lg shadow-xl z-10 overflow-hidden">
+                    {/* Search input */}
+                    <div className="p-2 border-b border-slate-600">
+                      <div className="relative">
+                        <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <input
+                          type="text"
+                          value={modelSearch}
+                          onChange={(e) => setModelSearch(e.target.value)}
+                          placeholder="Search models..."
+                          className="w-full bg-slate-600 border border-slate-500 rounded px-3 py-1.5 pl-8 text-sm text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                          autoFocus
+                        />
+                      </div>
+                    </div>
+                    
+                    <div className="max-h-48 overflow-y-auto">
+                      {/* Default option - only show when not searching */}
+                      {!modelSearch.trim() && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setModel('');
+                            setIsModelOpen(false);
+                            setModelSearch('');
+                          }}
+                          className={`w-full px-3 py-2.5 text-left hover:bg-slate-600 transition-colors ${
+                            !model ? 'bg-slate-600' : ''
+                          }`}
+                        >
+                          <div className="text-slate-400">Default (auto-select)</div>
+                          <div className="text-xs text-slate-500">Use the model configured on the gateway</div>
+                        </button>
+                      )}
+                      
+                      {/* Available models */}
+                      {filteredModelOptions.length > 0 ? (
+                        filteredModelOptions.map((option) => (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => {
+                              setModel(option.value);
+                              setIsModelOpen(false);
+                              setModelSearch('');
+                            }}
+                            className={`w-full px-3 py-2.5 text-left hover:bg-slate-600 transition-colors ${
+                              model === option.value ? 'bg-slate-600' : ''
+                            }`}
+                          >
+                            <div className="text-cyan-400">{option.model.name}</div>
+                            <div className="text-xs text-slate-400">{option.provider} - {option.value}</div>
+                          </button>
+                        ))
+                      ) : (
+                        !modelsLoading && (
+                          <div className="px-3 py-2.5 text-slate-500 text-sm">
+                            {modelSearch.trim() ? 'No matching models' : 'No models available from this host'}
+                          </div>
+                        )
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Footer Actions */}
@@ -299,7 +441,7 @@ export function CreateTaskModal({
           <button
             type="button"
             onClick={handleCreate}
-            disabled={isLoading || !title.trim()}
+            disabled={isLoading || !title.trim() || !projectId}
             className="flex items-center gap-2 px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isLoading ? (
@@ -314,7 +456,7 @@ export function CreateTaskModal({
             <button
               type="button"
               onClick={handleCreateAndStart}
-              disabled={isLoading || !title.trim()}
+              disabled={isLoading || !title.trim() || !projectId}
               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isLoading ? (

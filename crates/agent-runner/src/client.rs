@@ -1,4 +1,6 @@
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use futures::StreamExt;
 use reqwest::Client;
 use serde::Serialize;
@@ -35,6 +37,25 @@ struct InputRequest {
 pub struct WorkerClient {
     client: Client,
     url: String,
+}
+
+pub trait WorkerClientApi: Send + Sync {
+    fn execute(
+        &self,
+        task_id: String,
+        prompt: String,
+        cwd: PathBuf,
+        agent_type: AgentType,
+        event_tx: mpsc::Sender<AgentEvent>,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
+
+    fn stop(&self, task_id: String) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
+
+    fn send_input(
+        &self,
+        task_id: String,
+        content: String,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
 }
 
 impl WorkerClient {
@@ -155,5 +176,30 @@ impl WorkerClient {
             .await
             .map_err(|e| ExecutorError::execution_failed(format!("Failed to send input: {}", e)))?;
         Ok(())
+    }
+}
+
+impl WorkerClientApi for WorkerClient {
+    fn execute(
+        &self,
+        task_id: String,
+        prompt: String,
+        cwd: PathBuf,
+        agent_type: AgentType,
+        event_tx: mpsc::Sender<AgentEvent>,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(self.execute(task_id, prompt, cwd, agent_type, event_tx))
+    }
+
+    fn stop(&self, task_id: String) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(self.stop(task_id))
+    }
+
+    fn send_input(
+        &self,
+        task_id: String,
+        content: String,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(self.send_input(task_id, content))
     }
 }

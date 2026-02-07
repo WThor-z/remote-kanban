@@ -2,9 +2,17 @@ import { useState, useEffect, useCallback } from 'react';
 import type { Socket } from 'socket.io-client';
 import type {
   TaskSessionHistory,
-  ChatMessage,
   AgentSessionStatus,
 } from '@opencode-vibe/protocol';
+
+// Extended ChatMessage with streaming support
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: number;
+  isStreaming?: boolean;
+}
 
 interface UseTaskSessionOptions {
   socket: Socket | undefined;
@@ -60,18 +68,25 @@ export function useTaskSession({ socket, isConnected }: UseTaskSessionOptions): 
     const handleTaskMessage = (payload: { taskId: string; message: ChatMessage }) => {
       if (payload.taskId === selectedTaskId) {
         setHistory(prev => {
-          if (!prev) return prev;
-          // 如果是同一个 assistant 消息，更新它
-          const lastMessage = prev.messages[prev.messages.length - 1];
-          if (lastMessage?.id === payload.message.id) {
+          if (!prev) {
+            // No history yet, just return null and wait for full history
+            return prev;
+          }
+          
+          // Find if message with same ID already exists
+          const existingIndex = prev.messages.findIndex(m => m.id === payload.message.id);
+          
+          if (existingIndex >= 0) {
+            // Update existing message (for streaming -> complete transition)
             const updatedMessages = [...prev.messages];
-            updatedMessages[updatedMessages.length - 1] = payload.message;
+            updatedMessages[existingIndex] = payload.message as any;
             return { ...prev, messages: updatedMessages };
           }
-          // 否则追加新消息
+          
+          // Add new message
           return {
             ...prev,
-            messages: [...prev.messages, payload.message],
+            messages: [...prev.messages, payload.message as any],
           };
         });
       }

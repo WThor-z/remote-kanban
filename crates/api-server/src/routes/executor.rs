@@ -9,16 +9,30 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use uuid::Uuid;
 
-use agent_runner::{ExecuteRequest, SessionState, ExecutionEventType, AgentEvent};
+use agent_runner::{AgentType, ChatMessage, MessageRole, Run, SessionState};
+use vk_core::kanban::KanbanTaskStatus;
 use vk_core::task::TaskRepository;
 
+use crate::gateway::protocol::GatewayTaskRequest;
 use crate::state::AppState;
 
 // ============================================================================
 // Request/Response types
 // ============================================================================
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartExecutionRequest {
+    pub agent_type: String,
+    pub base_branch: String,
+    /// Optional target host for remote execution
+    pub target_host: Option<String>,
+    /// Optional model to use (format: provider/model)
+    pub model: Option<String>,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,6 +89,12 @@ async fn start_execution(
     Path(task_id): Path<Uuid>,
     Json(req): Json<StartExecutionRequest>,
 ) -> Result<(StatusCode, Json<ExecutionResponse>), (StatusCode, Json<ErrorResponse>)> {
+    // Log received request for debugging
+    tracing::info!(
+        "Execute request for task {}: agent_type={}, target_host={:?}, model={:?}",
+        task_id, req.agent_type, req.target_host, req.model
+    );
+
     // Verify task exists
     let task = state
         .task_store()
@@ -97,6 +117,24 @@ async fn start_execution(
             )
         })?;
 
+    let project_id = task.project_id.ok_or_else(|| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ErrorResponse {
+                error: "Project is required".to_string(),
+            }),
+        )
+    })?;
+
+    let project = state.project_store().get(project_id).await.ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Project {} not found", project_id),
+            }),
+        )
+    })?;
+
     // Build prompt from task
     let prompt = if let Some(desc) = &task.description {
         format!("{}\n\n{}", task.title, desc)
@@ -104,131 +142,371 @@ async fn start_execution(
         task.title.clone()
     };
 
-    // Create execute request
-    let execute_req = ExecuteRequest {
+    let base_branch = task
+        .base_branch
+        .clone()
+        .unwrap_or_else(|| project.default_branch.clone());
+
+    if let Some(target_host) = &req.target_host {
+        tracing::info!(
+            "Ignoring requested target_host={} for task {} because execution is project-bound",
+            target_host,
+            task_id
+        );
+    }
+
+    dispatch_to_gateway(
+        &state,
         task_id,
-        agent_type: req.agent_type,
-        base_branch: req.base_branch,
-        prompt,
-    };
-
-    // Start execution
-    let (session_id, mut event_rx) = state.executor().execute(execute_req).await.map_err(|e| {
-        tracing::error!("Failed to start execution: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
-
-    // Spawn event bridge to Socket.IO
-    let state_clone = state.clone();
-    // let task_id_clone = task_id;
-    tokio::spawn(async move {
-        let io = state_clone.get_socket_io().await;
-        if let Some(io) = io {
-            while let Some(event) = event_rx.recv().await {
-                // Emit structured event
-                // We emit to all clients. In production, we should emit to a room "task:{task_id}"
-                let _ = io.emit("task:execution_event", &event);
-                
-                // Compatibility mapping for existing UI components
-                match &event.event {
-                    agent_runner::ExecutionEventType::StatusChanged { new_status, .. } => {
-                        let status_str = match new_status {
-                            agent_runner::ExecutionStatus::Initializing |
-                            agent_runner::ExecutionStatus::CreatingWorktree |
-                            agent_runner::ExecutionStatus::Starting => "starting",
-                            agent_runner::ExecutionStatus::Running |
-                            agent_runner::ExecutionStatus::CleaningUp => "running",
-                            agent_runner::ExecutionStatus::Paused => "paused",
-                            agent_runner::ExecutionStatus::Completed => "completed",
-                            agent_runner::ExecutionStatus::Failed => "failed",
-                            agent_runner::ExecutionStatus::Cancelled => "aborted",
-                        };
-                        
-                        #[derive(Serialize)]
-                        struct StatusPayload {
-                            #[serde(rename = "taskId")]
-                            task_id: Uuid,
-                            status: String,
-                        }
-                        let _ = io.emit("task:status", &StatusPayload {
-                            task_id: event.task_id,
-                            status: status_str.to_string(),
-                        });
-                    },
-                    agent_runner::ExecutionEventType::AgentEvent { event: agent_event } => {
-                        match agent_event {
-                            agent_runner::AgentEvent::Message { content } | 
-                            agent_runner::AgentEvent::Thinking { content } |
-                            agent_runner::AgentEvent::Error { message: content, .. } |
-                            agent_runner::AgentEvent::RawOutput { content, .. } => {
-                                // Send as chat message
-                                let role = match agent_event {
-                                    agent_runner::AgentEvent::Thinking { .. } => "system",
-                                    agent_runner::AgentEvent::Error { .. } => "system",
-                                    _ => "assistant",
-                                };
-
-                                let content = match agent_event {
-                                    agent_runner::AgentEvent::Thinking { .. } => format!("💭 {}", content),
-                                    agent_runner::AgentEvent::Error { .. } => format!("❌ Error: {}", content),
-                                    _ => content.clone(),
-                                };
-                                
-                                emit_message(&io, event.task_id, event.id, role, content, event.timestamp.timestamp_millis());
-                            },
-                            agent_runner::AgentEvent::Command { command, output, .. } => {
-                                let content = format!("$ {}\n{}", command, output);
-                                emit_message(&io, event.task_id, event.id, "assistant", content, event.timestamp.timestamp_millis());
-                            },
-                            _ => {}
-                        }
-                    },
-                    _ => {}
-                }
-            }
-        }
-    });
-
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(ExecutionResponse {
-            session_id,
-            task_id,
-            status: "started".to_string(),
-            message: "Execution started successfully".to_string(),
-        }),
-    ))
+        &prompt,
+        &req.agent_type,
+        &project.gateway_id.to_string(),
+        &project.local_path,
+        req.model.as_deref(),
+        &base_branch,
+    )
+    .await
 }
 
-fn emit_message(io: &socketioxide::SocketIo, task_id: Uuid, id: Uuid, role: &str, content: String, timestamp: i64) {
-    #[derive(Serialize)]
-    struct MessagePayload {
-        #[serde(rename = "taskId")]
-        task_id: Uuid,
-        message: TaskMessage,
-    }
-    #[derive(Serialize)]
-    struct TaskMessage {
-        id: String,
-        role: String,
-        content: String,
-        timestamp: i64,
-    }
+/// Dispatch task to a remote Gateway host
+async fn dispatch_to_gateway(
+    state: &AppState,
+    task_id: Uuid,
+    prompt: &str,
+    agent_type: &str,
+    target_host: &str,
+    cwd: &str,
+    model: Option<&str>,
+    base_branch: &str,
+) -> Result<(StatusCode, Json<ExecutionResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let gateway_manager = state.gateway_manager();
 
-    let _ = io.emit("task:message", &MessagePayload {
-        task_id,
-        message: TaskMessage {
-            id: id.to_string(),
-            role: role.to_string(),
-            content,
-            timestamp,
+    let gateway_task = GatewayTaskRequest {
+        task_id: task_id.to_string(),
+        prompt: prompt.to_string(),
+        cwd: cwd.to_string(),
+        agent_type: agent_type.to_string(),
+        model: model.map(String::from),
+        env: HashMap::new(),
+        timeout: None,
+        metadata: serde_json::Value::Null,
+    };
+
+    match gateway_manager
+        .dispatch_task_to_host(target_host, gateway_task)
+        .await
+    {
+        Ok(host_id) => {
+            tracing::info!("Task {} dispatched to gateway host {}", task_id, host_id);
+            
+            // Create a Run record for this gateway execution
+            let run_id = Uuid::new_v4();
+            let parsed_agent_type = AgentType::from_str(agent_type)
+                .unwrap_or(AgentType::OpenCode);
+            let mut run = Run::new(
+                task_id,
+                parsed_agent_type,
+                prompt.to_string(),
+                base_branch.to_string(),
+            );
+            // Override the generated ID to use our run_id
+            run.id = run_id;
+            run.mark_started();
+            
+            // Save the initial run record
+            if let Err(e) = state.executor().run_store().save_run(&run) {
+                tracing::warn!("Failed to save initial run record for gateway task {}: {}", task_id, e);
+            } else {
+                tracing::info!("Created run {} for gateway task {}", run_id, task_id);
+            }
+            
+            // Set up event forwarding from Gateway to Socket.IO
+            let state_clone = state.clone();
+            let task_id_str = task_id.to_string();
+            let prompt_clone = prompt.to_string();
+            let agent_type_clone = parsed_agent_type;
+            let base_branch = base_branch.to_string();
+            tokio::spawn(async move {
+                let mut event_rx = state_clone.gateway_manager().subscribe();
+                let io = state_clone.get_socket_io().await;
+                let mut event_count: u32 = 0;
+                // Accumulate stdout content for final message
+                let mut accumulated_output = String::new();
+                // Fixed message ID for streaming updates
+                let message_id = uuid::Uuid::new_v4().to_string();
+                
+                if let Some(io) = io {
+                    // Move task to Doing when execution starts
+                    {
+                        let kanban_store = state_clone.kanban_store();
+                        if let Err(e) = kanban_store.move_task(&task_id_str, KanbanTaskStatus::Doing, None).await {
+                            tracing::warn!("Failed to move kanban task {} to Doing: {}", task_id_str, e);
+                        } else {
+                            tracing::info!("Kanban task {} moved to Doing", task_id_str);
+                            // Broadcast initial kanban sync
+                            let board_state = kanban_store.get_state().await;
+                            let _ = io.emit("kanban:sync", &board_state);
+                        }
+                    }
+                    
+                    // Send initial "working" message
+                    {
+                        #[derive(serde::Serialize)]
+                        struct MessagePayload {
+                            #[serde(rename = "taskId")]
+                            task_id: String,
+                            message: TaskMessage,
+                        }
+                        #[derive(serde::Serialize)]
+                        struct TaskMessage {
+                            id: String,
+                            role: String,
+                            content: String,
+                            timestamp: i64,
+                            #[serde(rename = "isStreaming")]
+                            is_streaming: bool,
+                        }
+                        
+                        let _ = io.emit("task:message", &MessagePayload {
+                            task_id: task_id_str.clone(),
+                            message: TaskMessage {
+                                id: message_id.clone(),
+                                role: "assistant".to_string(),
+                                content: "正在工作中...".to_string(),
+                                timestamp: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as i64,
+                                is_streaming: true,
+                            },
+                        });
+                    }
+                    
+                    while let Ok(event) = event_rx.recv().await {
+                        if event.task_id == task_id_str {
+                            event_count += 1;
+                            
+                            // Forward gateway event to Socket.IO for Logs panel
+                            let _ = io.emit("task:gateway_event", &event);
+                            
+                            // Accumulate stdout content
+                            if let Some(content) = &event.event.content {
+                                match event.event.event_type {
+                                    crate::gateway::protocol::GatewayAgentEventType::Stdout => {
+                                        if !content.starts_with("[executor]") && 
+                                           !content.starts_with("[Gateway]") &&
+                                           !content.is_empty() {
+                                            accumulated_output.push_str(content);
+                                        }
+                                    }
+                                    crate::gateway::protocol::GatewayAgentEventType::Message => {
+                                        accumulated_output.push_str(content);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            
+                            // Check for Completed/Failed events and update Run record
+                            match event.event.event_type {
+                                crate::gateway::protocol::GatewayAgentEventType::Completed => {
+                                    // Update Run record
+                                    let mut run = Run::new(
+                                        task_id,
+                                        agent_type_clone,
+                                        prompt_clone.clone(),
+                                        base_branch.clone(),
+                                    );
+                                    run.id = run_id;
+                                    run.mark_started();
+                                    run.mark_completed(0, event.event.content.clone());
+                                    run.event_count = event_count;
+                                    
+                                    if let Err(e) = state_clone.executor().run_store().save_run(&run) {
+                                        tracing::warn!("Failed to save completed run for task {}: {}", task_id_str, e);
+                                    } else {
+                                        tracing::info!("Run {} completed for gateway task {}", run_id, task_id_str);
+                                    }
+                                    
+                                    // Send final complete message (replacing the streaming one)
+                                    {
+                                        #[derive(serde::Serialize)]
+                                        struct MessagePayload {
+                                            #[serde(rename = "taskId")]
+                                            task_id: String,
+                                            message: TaskMessage,
+                                        }
+                                        #[derive(serde::Serialize)]
+                                        struct TaskMessage {
+                                            id: String,
+                                            role: String,
+                                            content: String,
+                                            timestamp: i64,
+                                            #[serde(rename = "isStreaming")]
+                                            is_streaming: bool,
+                                        }
+                                        
+                                        let final_content = if accumulated_output.is_empty() {
+                                            event.event.content.clone().unwrap_or_else(|| "任务完成".to_string())
+                                        } else {
+                                            accumulated_output.clone()
+                                        };
+                                        
+                                        let msg_timestamp = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis() as i64;
+                                        
+                                        let _ = io.emit("task:message", &MessagePayload {
+                                            task_id: task_id_str.clone(),
+                                            message: TaskMessage {
+                                                id: message_id.clone(),
+                                                role: "assistant".to_string(),
+                                                content: final_content.clone(),
+                                                timestamp: msg_timestamp,
+                                                is_streaming: false,
+                                            },
+                                        });
+                                        
+                                        // Persist the message to disk
+                                        let chat_msg = ChatMessage::with_id(
+                                            message_id.clone(),
+                                            MessageRole::Assistant,
+                                            final_content,
+                                        );
+                                        if let Err(e) = state_clone.executor().run_store().append_message(task_id, run_id, &chat_msg) {
+                                            tracing::warn!("Failed to persist message for task {}: {}", task_id_str, e);
+                                        }
+                                    }
+                                    
+                                    // Broadcast kanban sync
+                                    let kanban_store = state_clone.kanban_store();
+                                    let board_state = kanban_store.get_state().await;
+                                    let _ = io.emit("kanban:sync", &board_state);
+                                    tracing::info!("Broadcasted kanban:sync after task {} completed", task_id_str);
+                                    break;
+                                }
+                                crate::gateway::protocol::GatewayAgentEventType::Failed => {
+                                    // Update Run record
+                                    let mut run = Run::new(
+                                        task_id,
+                                        agent_type_clone,
+                                        prompt_clone.clone(),
+                                        base_branch.clone(),
+                                    );
+                                    run.id = run_id;
+                                    run.mark_started();
+                                    run.mark_failed(event.event.content.clone().unwrap_or_else(|| "Unknown error".to_string()));
+                                    run.event_count = event_count;
+                                    
+                                    if let Err(e) = state_clone.executor().run_store().save_run(&run) {
+                                        tracing::warn!("Failed to save failed run for task {}: {}", task_id_str, e);
+                                    } else {
+                                        tracing::info!("Run {} failed for gateway task {}", run_id, task_id_str);
+                                    }
+                                    
+                                    // Send error message
+                                    {
+                                        #[derive(serde::Serialize)]
+                                        struct MessagePayload {
+                                            #[serde(rename = "taskId")]
+                                            task_id: String,
+                                            message: TaskMessage,
+                                        }
+                                        #[derive(serde::Serialize)]
+                                        struct TaskMessage {
+                                            id: String,
+                                            role: String,
+                                            content: String,
+                                            timestamp: i64,
+                                            #[serde(rename = "isStreaming")]
+                                            is_streaming: bool,
+                                        }
+                                        
+                                        let error_content = event.event.content.clone()
+                                            .unwrap_or_else(|| "任务执行失败".to_string());
+                                        
+                                        let error_msg_content = format!("❌ {}", error_content);
+                                        let msg_timestamp = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis() as i64;
+                                        
+                                        let _ = io.emit("task:message", &MessagePayload {
+                                            task_id: task_id_str.clone(),
+                                            message: TaskMessage {
+                                                id: message_id.clone(),
+                                                role: "system".to_string(),
+                                                content: error_msg_content.clone(),
+                                                timestamp: msg_timestamp,
+                                                is_streaming: false,
+                                            },
+                                        });
+                                        
+                                        // Persist the error message to disk
+                                        let chat_msg = ChatMessage::with_id(
+                                            message_id.clone(),
+                                            MessageRole::System,
+                                            error_msg_content,
+                                        );
+                                        if let Err(e) = state_clone.executor().run_store().append_message(task_id, run_id, &chat_msg) {
+                                            tracing::warn!("Failed to persist error message for task {}: {}", task_id_str, e);
+                                        }
+                                    }
+                                    
+                                    // Broadcast kanban sync
+                                    let kanban_store = state_clone.kanban_store();
+                                    let board_state = kanban_store.get_state().await;
+                                    let _ = io.emit("kanban:sync", &board_state);
+                                    tracing::info!("Broadcasted kanban:sync after task {} failed", task_id_str);
+                                    break;
+                                }
+                                _ => {}
+                            }
+                            
+                            // Also emit as execution_event for the ExecutionLogPanel
+                            #[derive(serde::Serialize)]
+                            struct ExecutionEventBase {
+                                task_id: String,
+                                event_type: String,
+                                content: Option<String>,
+                                timestamp: u64,
+                            }
+                            let _ = io.emit("task:execution_event", &ExecutionEventBase {
+                                task_id: task_id_str.clone(),
+                                event_type: format!("{:?}", event.event.event_type).to_lowercase(),
+                                content: event.event.content.clone(),
+                                timestamp: event.event.timestamp,
+                            });
+                        }
+                    }
+                }
+            });
+
+            Ok((
+                StatusCode::ACCEPTED,
+                Json(ExecutionResponse {
+                    session_id: run_id, // Use the run_id as session_id for consistency
+                    task_id,
+                    status: "dispatched".to_string(),
+                    message: format!("Task dispatched to gateway host: {}", host_id),
+                }),
+            ))
         }
-    });
+        Err(e) => {
+            tracing::error!("Failed to dispatch task to gateway: {}", e);
+            let status = if e.starts_with("Host") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::SERVICE_UNAVAILABLE
+            };
+            Err((
+                status,
+                Json(ErrorResponse {
+                    error: format!("Gateway dispatch failed: {}", e),
+                }),
+            ))
+        }
+    }
 }
 
 /// GET /api/tasks/:id/status - Get execution status
@@ -439,4 +717,235 @@ pub fn router() -> Router<AppState> {
         // Session endpoints
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/{id}", get(get_session))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{collections::HashMap, sync::Arc};
+
+    use axum::{
+        body::{to_bytes, Body},
+        http::Request,
+    };
+    use serde_json::{json, Value};
+    use tempfile::TempDir;
+    use tower::ServiceExt;
+    use vk_core::{
+        kanban::KanbanStore,
+        project::CreateProjectRequest,
+        task::{FileTaskStore, Task},
+    };
+
+    use crate::{
+        gateway::{
+            protocol::{HostCapabilities, ServerToGatewayMessage},
+            GatewayManager,
+        },
+        state::AppState,
+    };
+
+    async fn build_state() -> (AppState, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let data_dir = temp_dir.path().to_path_buf();
+
+        let tasks_path = data_dir.join("tasks.json");
+        let task_store = Arc::new(FileTaskStore::new(tasks_path).await.unwrap());
+        let kanban_path = data_dir.join("kanban.json");
+        let kanban_store = Arc::new(
+            KanbanStore::with_task_store(kanban_path, Arc::clone(&task_store))
+                .await
+                .unwrap(),
+        );
+        let gateway_manager = Arc::new(GatewayManager::with_stores(
+            Arc::clone(&task_store),
+            Arc::clone(&kanban_store),
+        ));
+        let state = AppState::with_stores(
+            data_dir,
+            Arc::clone(&task_store),
+            Arc::clone(&kanban_store),
+            Arc::clone(&gateway_manager),
+        )
+        .await
+        .unwrap();
+
+        (state, temp_dir)
+    }
+
+    fn execution_body() -> Body {
+        Body::from(
+            json!({
+                "agentType": "opencode",
+                "baseBranch": "main"
+            })
+            .to_string(),
+        )
+    }
+
+    #[test]
+    fn start_execution_request_deserializes_camel_case() {
+        let value = serde_json::json!({
+            "agentType": "opencode",
+            "baseBranch": "main"
+        });
+        let req: StartExecutionRequest = serde_json::from_value(value).expect("valid payload");
+        assert_eq!(req.agent_type, "opencode");
+        assert_eq!(req.base_branch, "main");
+    }
+
+    #[tokio::test]
+    async fn start_execution_without_project_id_returns_unprocessable_entity() {
+        let (state, _temp_dir) = build_state().await;
+        let task = state
+            .task_store()
+            .create(Task::new("No project".to_string()))
+            .await
+            .unwrap();
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/tasks/{}/execute", task.id))
+                    .header("Content-Type", "application/json")
+                    .body(execution_body())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error"], "Project is required");
+    }
+
+    #[tokio::test]
+    async fn start_execution_with_missing_project_returns_not_found() {
+        let (state, _temp_dir) = build_state().await;
+        let task = state
+            .task_store()
+            .create(Task::new("Unknown project".to_string()).with_project_id(Uuid::new_v4()))
+            .await
+            .unwrap();
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/tasks/{}/execute", task.id))
+                    .header("Content-Type", "application/json")
+                    .body(execution_body())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn start_execution_with_offline_project_host_returns_conflict() {
+        let (state, _temp_dir) = build_state().await;
+        let project = state
+            .project_store()
+            .register(
+                Uuid::new_v4(),
+                CreateProjectRequest {
+                    name: "offline-project".to_string(),
+                    local_path: "/tmp/offline-project".to_string(),
+                    remote_url: None,
+                    default_branch: None,
+                    worktree_dir: None,
+                },
+            )
+            .await
+            .unwrap();
+        let task = state
+            .task_store()
+            .create(Task::new("Offline host".to_string()).with_project_id(project.id))
+            .await
+            .unwrap();
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/tasks/{}/execute", task.id))
+                    .header("Content-Type", "application/json")
+                    .body(execution_body())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn start_execution_dispatches_project_cwd_to_bound_host() {
+        let (state, _temp_dir) = build_state().await;
+        let project = state
+            .project_store()
+            .register(
+                Uuid::new_v4(),
+                CreateProjectRequest {
+                    name: "bound-project".to_string(),
+                    local_path: "/tmp/bound-project".to_string(),
+                    remote_url: None,
+                    default_branch: Some("develop".to_string()),
+                    worktree_dir: None,
+                },
+            )
+            .await
+            .unwrap();
+        let task = state
+            .task_store()
+            .create(Task::new("Dispatch cwd".to_string()).with_project_id(project.id))
+            .await
+            .unwrap();
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+        state
+            .gateway_manager()
+            .register_host(
+                project.gateway_id.to_string(),
+                HostCapabilities {
+                    name: "Bound host".to_string(),
+                    agents: vec!["opencode".to_string()],
+                    max_concurrent: 2,
+                    cwd: "/tmp".to_string(),
+                    labels: HashMap::new(),
+                },
+                tx,
+            )
+            .await;
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/tasks/{}/execute", task.id))
+                    .header("Content-Type", "application/json")
+                    .body(execution_body())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let msg = rx.recv().await.unwrap();
+        match msg {
+            ServerToGatewayMessage::TaskExecute { task } => {
+                assert_eq!(task.cwd, project.local_path);
+            }
+            _ => panic!("expected task dispatch message"),
+        }
+    }
 }

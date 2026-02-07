@@ -3,11 +3,12 @@
 //! RESTful API for task CRUD operations.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
-    routing::get,
+    routing::{delete, get},
     Json, Router,
 };
+use agent_runner::{ChatMessage, ExecutionEvent, ExecutionStatus, RunSummary};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -24,6 +25,8 @@ use crate::state::AppState;
 pub struct CreateTaskRequest {
     pub title: String,
     #[serde(default)]
+    pub project_id: Option<Uuid>,
+    #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
     pub priority: Option<TaskPriority>,
@@ -31,6 +34,8 @@ pub struct CreateTaskRequest {
     pub agent_type: Option<String>,
     #[serde(default)]
     pub base_branch: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,26 +54,89 @@ pub struct UpdateTaskRequest {
 #[serde(rename_all = "camelCase")]
 pub struct TaskResponse {
     pub id: Uuid,
+    pub project_id: Option<Uuid>,
     pub title: String,
     pub description: Option<String>,
     pub status: TaskStatus,
     pub priority: TaskPriority,
     pub agent_type: Option<String>,
     pub base_branch: Option<String>,
+    pub model: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunSummaryResponse {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub agent_type: String,
+    pub prompt_preview: String,
+    pub created_at: String,
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub status: ExecutionStatus,
+    pub event_count: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunEventsQuery {
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub event_type: Option<String>,
+    #[serde(default)]
+    pub agent_event_type: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunEventsResponse {
+    pub events: Vec<ExecutionEvent>,
+    pub has_more: bool,
+    pub next_offset: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunMessagesResponse {
+    pub messages: Vec<ChatMessage>,
+}
+
+impl From<RunSummary> for RunSummaryResponse {
+    fn from(run: RunSummary) -> Self {
+        Self {
+            id: run.id,
+            task_id: run.task_id,
+            agent_type: run.agent_type.as_str().to_string(),
+            prompt_preview: run.prompt_preview,
+            created_at: run.created_at.to_rfc3339(),
+            started_at: run.started_at.map(|t| t.to_rfc3339()),
+            ended_at: run.ended_at.map(|t| t.to_rfc3339()),
+            duration_ms: run.duration_ms,
+            status: run.status,
+            event_count: run.event_count,
+        }
+    }
 }
 
 impl From<Task> for TaskResponse {
     fn from(task: Task) -> Self {
         Self {
             id: task.id,
+            project_id: task.project_id,
             title: task.title,
             description: task.description,
             status: task.status,
             priority: task.priority,
             agent_type: task.agent_type,
             base_branch: task.base_branch,
+            model: task.model,
             created_at: task.created_at.to_rfc3339(),
             updated_at: task.updated_at.to_rfc3339(),
         }
@@ -115,7 +183,26 @@ async fn create_task(
         ));
     }
 
-    let mut task = Task::new(req.title);
+    let project_id = req.project_id.ok_or_else(|| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ErrorResponse {
+                error: "Project is required".to_string(),
+            }),
+        )
+    })?;
+
+    let project = state.project_store().get(project_id).await;
+    if project.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Project {} not found", project_id),
+            }),
+        ));
+    }
+
+    let mut task = Task::new(req.title).with_project_id(project_id);
 
     if let Some(desc) = req.description {
         task = task.with_description(desc);
@@ -131,6 +218,10 @@ async fn create_task(
 
     if let Some(base_branch) = req.base_branch {
         task = task.with_base_branch(base_branch);
+    }
+
+    if let Some(model) = req.model {
+        task = task.with_model(model);
     }
 
     let created = state.task_store().create(task).await.map_err(|e| {
@@ -168,6 +259,273 @@ async fn get_task(
             }),
         )),
     }
+}
+
+/// GET /api/tasks/:id/runs - List all runs for a task
+async fn list_task_runs(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<RunSummaryResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    let task = state.task_store().get(id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    if task.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Task {} not found", id),
+            }),
+        ));
+    }
+
+    let runs = state.executor().list_runs(id).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    Ok(Json(
+        runs.into_iter().map(RunSummaryResponse::from).collect(),
+    ))
+}
+
+/// DELETE /api/tasks/:id/runs - Delete all runs for a task
+async fn delete_task_runs(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let task = state.task_store().get(id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    if task.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Task {} not found", id),
+            }),
+        ));
+    }
+
+    let runs = state.executor().list_runs(id).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    if runs.iter().any(|run| run.status.is_active()) {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                error: "Run is active".to_string(),
+            }),
+        ));
+    }
+
+    state
+        .executor()
+        .run_store()
+        .delete_task_runs(id)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET /api/tasks/:id/runs/:run_id/events - List events for a run
+async fn list_run_events(
+    State(state): State<AppState>,
+    Path((task_id, run_id)): Path<(Uuid, Uuid)>,
+    Query(query): Query<RunEventsQuery>,
+) -> Result<Json<RunEventsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let task = state.task_store().get(task_id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    if task.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Task {} not found", task_id),
+            }),
+        ));
+    }
+
+    let runs = state.executor().list_runs(task_id).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    if !runs.iter().any(|run| run.id == run_id) {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Run {} not found", run_id),
+            }),
+        ));
+    }
+
+    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.unwrap_or(200).min(1000);
+
+    let (events, has_more) = state.executor().load_run_events(
+        task_id,
+        run_id,
+        offset,
+        limit,
+        query.event_type,
+        query.agent_event_type,
+    ).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    let next_offset = if has_more { Some(offset + events.len()) } else { None };
+
+    Ok(Json(RunEventsResponse {
+        events,
+        has_more,
+        next_offset,
+    }))
+}
+
+/// GET /api/tasks/:id/runs/:run_id/messages - List messages for a run
+async fn list_run_messages(
+    State(state): State<AppState>,
+    Path((task_id, run_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<RunMessagesResponse>, (StatusCode, Json<ErrorResponse>)> {
+    // Verify task exists
+    let task = state.task_store().get(task_id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    if task.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Task {} not found", task_id),
+            }),
+        ));
+    }
+
+    // Load messages from RunStore
+    let messages = state.executor().run_store().load_messages(task_id, run_id).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    Ok(Json(RunMessagesResponse { messages }))
+}
+
+/// DELETE /api/tasks/:id/runs/:run_id - Delete a run
+async fn delete_run(
+    State(state): State<AppState>,
+    Path((task_id, run_id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let task = state.task_store().get(task_id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    if task.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Task {} not found", task_id),
+            }),
+        ));
+    }
+
+    let runs = state.executor().list_runs(task_id).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    let run = runs.iter().find(|run| run.id == run_id).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Run {} not found", run_id),
+            }),
+        )
+    })?;
+
+    if run.status.is_active() {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                error: "Run is active".to_string(),
+            }),
+        ));
+    }
+
+    state
+        .executor()
+        .run_store()
+        .delete_run(task_id, run_id)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// PATCH /api/tasks/:id - Update a task
@@ -272,4 +630,339 @@ pub fn router() -> Router<AppState> {
             "/api/tasks/{id}",
             get(get_task).patch(update_task).delete(delete_task),
         )
+        .route(
+            "/api/tasks/{id}/runs",
+            get(list_task_runs).delete(delete_task_runs),
+        )
+        .route("/api/tasks/{id}/runs/{run_id}", delete(delete_run))
+        .route("/api/tasks/{id}/runs/{run_id}/events", get(list_run_events))
+        .route("/api/tasks/{id}/runs/{run_id}/messages", get(list_run_messages))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use agent_runner::{AgentType, Run};
+    use axum::{body::{to_bytes, Body}, http::Request};
+    use serde_json::{json, Value};
+    use tempfile::TempDir;
+    use tower::ServiceExt;
+    use vk_core::kanban::KanbanStore;
+    use vk_core::project::CreateProjectRequest;
+    use vk_core::task::FileTaskStore;
+
+    use crate::gateway::GatewayManager;
+
+    async fn build_state() -> (AppState, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let data_dir = temp_dir.path().to_path_buf();
+
+        let tasks_path = data_dir.join("tasks.json");
+        let task_store = Arc::new(FileTaskStore::new(tasks_path).await.unwrap());
+        let kanban_path = data_dir.join("kanban.json");
+        let kanban_store = Arc::new(
+            KanbanStore::with_task_store(kanban_path, Arc::clone(&task_store))
+                .await
+                .unwrap(),
+        );
+        let gateway_manager = Arc::new(GatewayManager::with_stores(
+            Arc::clone(&task_store),
+            Arc::clone(&kanban_store),
+        ));
+        let state = AppState::with_stores(
+            data_dir,
+            Arc::clone(&task_store),
+            Arc::clone(&kanban_store),
+            Arc::clone(&gateway_manager),
+        )
+        .await
+        .unwrap();
+
+        (state, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn delete_run_returns_no_content() {
+        let (state, _temp_dir) = build_state().await;
+        let task = state
+            .task_store()
+            .create(Task::new("Delete run test".to_string()))
+            .await
+            .unwrap();
+
+        let mut run = Run::new(
+            task.id,
+            AgentType::OpenCode,
+            "Test prompt".to_string(),
+            "main".to_string(),
+        );
+        run.update_status(ExecutionStatus::Completed);
+        state.executor().run_store().save_run(&run).unwrap();
+
+        let app = router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/tasks/{}/runs/{}", task.id, run.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(state.executor().list_runs(task.id).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_run_missing_task_returns_not_found() {
+        let (state, _temp_dir) = build_state().await;
+        let task_id = Uuid::new_v4();
+        let run_id = Uuid::new_v4();
+
+        let app = router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/tasks/{}/runs/{}", task_id, run_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_run_missing_run_returns_not_found() {
+        let (state, _temp_dir) = build_state().await;
+        let task = state
+            .task_store()
+            .create(Task::new("Delete run missing".to_string()))
+            .await
+            .unwrap();
+        let run_id = Uuid::new_v4();
+
+        let app = router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/tasks/{}/runs/{}", task.id, run_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_run_active_run_returns_conflict() {
+        let (state, _temp_dir) = build_state().await;
+        let task = state
+            .task_store()
+            .create(Task::new("Delete run active".to_string()))
+            .await
+            .unwrap();
+
+        let mut run = Run::new(
+            task.id,
+            AgentType::OpenCode,
+            "Test prompt".to_string(),
+            "main".to_string(),
+        );
+        run.update_status(ExecutionStatus::Running);
+        state.executor().run_store().save_run(&run).unwrap();
+
+        let app = router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/tasks/{}/runs/{}", task.id, run.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn delete_task_runs_removes_all() {
+        let (state, _temp_dir) = build_state().await;
+        let task = state
+            .task_store()
+            .create(Task::new("Delete task runs".to_string()))
+            .await
+            .unwrap();
+
+        let mut first_run = Run::new(
+            task.id,
+            AgentType::OpenCode,
+            "Test prompt 1".to_string(),
+            "main".to_string(),
+        );
+        first_run.update_status(ExecutionStatus::Completed);
+        state.executor().run_store().save_run(&first_run).unwrap();
+
+        let mut second_run = Run::new(
+            task.id,
+            AgentType::OpenCode,
+            "Test prompt 2".to_string(),
+            "main".to_string(),
+        );
+        second_run.update_status(ExecutionStatus::Completed);
+        state.executor().run_store().save_run(&second_run).unwrap();
+
+        let app = router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/tasks/{}/runs", task.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(state.executor().list_runs(task.id).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_task_runs_rejects_active_runs() {
+        let (state, _temp_dir) = build_state().await;
+        let task = state
+            .task_store()
+            .create(Task::new("Delete task runs active".to_string()))
+            .await
+            .unwrap();
+
+        let mut run = Run::new(
+            task.id,
+            AgentType::OpenCode,
+            "Test prompt".to_string(),
+            "main".to_string(),
+        );
+        run.update_status(ExecutionStatus::Running);
+        state.executor().run_store().save_run(&run).unwrap();
+
+        let app = router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/tasks/{}/runs", task.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn create_task_without_project_id_returns_unprocessable_entity() {
+        let (state, _temp_dir) = build_state().await;
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/tasks")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(json!({ "title": "New task" }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error"], "Project is required");
+    }
+
+    #[tokio::test]
+    async fn create_task_with_missing_project_returns_not_found() {
+        let (state, _temp_dir) = build_state().await;
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/tasks")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "title": "New task",
+                            "projectId": Uuid::new_v4(),
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn create_task_with_valid_project_sets_project_id() {
+        let (state, _temp_dir) = build_state().await;
+        let project = state
+            .project_store()
+            .register(
+                Uuid::new_v4(),
+                CreateProjectRequest {
+                    name: "test-project".to_string(),
+                    local_path: "/tmp/test-project".to_string(),
+                    remote_url: None,
+                    default_branch: None,
+                    worktree_dir: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/tasks")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "title": "New task",
+                            "projectId": project.id,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["projectId"], project.id.to_string());
+    }
 }

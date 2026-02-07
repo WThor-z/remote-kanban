@@ -1,25 +1,12 @@
 import { useEffect, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
+import { resolveGatewaySocketUrl } from '../config/endpoints';
 import type { KanbanBoardState, KanbanTaskStatus } from '@opencode-vibe/protocol';
 
 let kanbanSocket: Socket | undefined;
 let kanbanSocketUrl: string | undefined;
 
-const resolveSocketUrl = () => {
-  const envUrl = typeof import.meta !== 'undefined'
-    ? import.meta.env?.VITE_OPENCODE_SOCKET_URL
-    : undefined;
-
-  if (envUrl) {
-    return envUrl;
-  }
-
-  if (typeof process !== 'undefined' && process.env?.OPENCODE_SOCKET_URL) {
-    return process.env.OPENCODE_SOCKET_URL;
-  }
-
-  return 'http://localhost:3000';
-};
+const resolveSocketUrl = () => resolveGatewaySocketUrl();
 
 const defaultBoardState: KanbanBoardState = {
   tasks: {},

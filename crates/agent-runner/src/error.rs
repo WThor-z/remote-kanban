@@ -29,6 +29,10 @@ pub enum ExecutorError {
     #[error("Session not found: {session_id}")]
     SessionNotFound { session_id: String },
 
+    /// Session not found for task
+    #[error("No active session for task: {task_id}")]
+    SessionNotFoundForTask { task_id: String },
+
     /// Session already exists
     #[error("Session already exists for task: {task_id}")]
     SessionExists { task_id: String },

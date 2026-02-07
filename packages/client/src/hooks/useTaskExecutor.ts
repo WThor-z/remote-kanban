@@ -7,6 +7,7 @@
 
 import { useState, useCallback } from 'react';
 import type { AgentType } from '@opencode-vibe/protocol';
+import { resolveApiBaseUrl } from '../config/endpoints';
 
 // Types matching the Rust API
 export interface ExecutionResponse {
@@ -34,15 +35,12 @@ export interface SessionSummary {
 export interface StartExecutionRequest {
   agentType: AgentType;
   baseBranch: string;
+  /** Model to use (format: provider/model) */
+  model?: string;
 }
 
 // API base URL
-const getApiBaseUrl = (): string => {
-  if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_RUST_API_URL) {
-    return import.meta.env.VITE_RUST_API_URL;
-  }
-  return 'http://localhost:8081';
-};
+const getApiBaseUrl = (): string => resolveApiBaseUrl();
 
 export interface UseTaskExecutorResult {
   isExecuting: boolean;
@@ -75,6 +73,14 @@ export function useTaskExecutor(): UseTaskExecutorResult {
     async (taskId: string, request: StartExecutionRequest): Promise<ExecutionResponse | null> => {
       setIsExecuting(true);
       setError(null);
+      
+      // Debug log
+      console.log('[useTaskExecutor] Starting execution:', {
+        taskId,
+        request,
+        model: request.model,
+      });
+      
       try {
         const response = await fetch(`${baseUrl}/api/tasks/${taskId}/execute`, {
           method: 'POST',

@@ -39,12 +39,14 @@ impl Default for TaskPriority {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: Uuid,
+    pub project_id: Option<Uuid>,
     pub title: String,
     pub description: Option<String>,
     pub status: TaskStatus,
     pub priority: TaskPriority,
     pub agent_type: Option<String>,
     pub base_branch: Option<String>,
+    pub model: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -55,12 +57,14 @@ impl Task {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4(),
+            project_id: None,
             title: title.into(),
             description: None,
             status: TaskStatus::default(),
             priority: TaskPriority::default(),
             agent_type: Some("opencode".to_string()),
             base_branch: Some("main".to_string()),
+            model: None,
             created_at: now,
             updated_at: now,
         }
@@ -69,6 +73,12 @@ impl Task {
     /// Set the description
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    /// Set the project id
+    pub fn with_project_id(mut self, project_id: Uuid) -> Self {
+        self.project_id = Some(project_id);
         self
     }
 
@@ -89,6 +99,12 @@ impl Task {
         self.base_branch = Some(base_branch.into());
         self
     }
+
+    /// Set the model
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
 }
 
 #[cfg(test)]
@@ -99,9 +115,18 @@ mod tests {
     fn test_create_task() {
         let task = Task::new("Test task");
         assert_eq!(task.title, "Test task");
+        assert!(task.project_id.is_none());
         assert_eq!(task.status, TaskStatus::Todo);
         assert_eq!(task.priority, TaskPriority::Medium);
         assert!(task.description.is_none());
+    }
+
+    #[test]
+    fn test_task_with_project_id() {
+        let project_id = Uuid::new_v4();
+        let task = Task::new("Test task").with_project_id(project_id);
+
+        assert_eq!(task.project_id, Some(project_id));
     }
 
     #[test]

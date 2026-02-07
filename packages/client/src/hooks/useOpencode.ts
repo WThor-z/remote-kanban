@@ -1,25 +1,23 @@
 import { useEffect, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
+import { resolveGatewaySocketUrl } from '../config/endpoints';
 
 let socket: Socket | undefined;
 let socketUrl: string | undefined;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
-const resolveSocketUrl = () => {
-  const envUrl = typeof import.meta !== 'undefined'
-    ? import.meta.env?.VITE_OPENCODE_SOCKET_URL
-    : undefined;
-
-  if (envUrl) {
-    return envUrl;
+export const __resetOpencodeSocketForTests = () => {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
   }
 
-  if (typeof process !== 'undefined' && process.env?.OPENCODE_SOCKET_URL) {
-    return process.env.OPENCODE_SOCKET_URL;
-  }
-
-  return 'http://localhost:3000';
+  socket?.disconnect();
+  socket = undefined;
+  socketUrl = undefined;
 };
+
+const resolveSocketUrl = () => resolveGatewaySocketUrl();
 
 const scheduleReconnect = (delayMs: number) => {
   if (!socket || reconnectTimer) {

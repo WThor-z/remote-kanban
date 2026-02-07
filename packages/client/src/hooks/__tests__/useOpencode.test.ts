@@ -1,6 +1,6 @@
 import { renderHook, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { useOpencode } from '../useOpencode';
+import { __resetOpencodeSocketForTests, useOpencode } from '../useOpencode';
 import { io } from 'socket.io-client';
 
 vi.mock('socket.io-client', () => {
@@ -17,6 +17,8 @@ vi.mock('socket.io-client', () => {
 describe('useOpencode', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetOpencodeSocketForTests();
+    delete process.env.OPENCODE_SOCKET_URL;
   });
 
   it('should set isConnected to true on connect event', () => {
@@ -49,7 +51,9 @@ describe('useOpencode', () => {
 
     renderHook(() => useOpencode());
 
-    expect(io).toHaveBeenCalledWith('http://localhost:4321');
+    expect(io).toHaveBeenCalledWith('http://localhost:4321', {
+      transports: ['websocket'],
+    });
 
     delete process.env.OPENCODE_SOCKET_URL;
   });

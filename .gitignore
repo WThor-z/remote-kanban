@@ -26,6 +26,7 @@ npm-debug.log*
 
 # Environment
 .env
+.env.gateway
 .env.local
 .env.*.local
 
@@ -43,17 +44,18 @@ coverage/
 .cursorrules
 AGENT.md
 
-# 项目计划文档 (本地专用)
-docs/plans/
-*_Plan.md
-*_plan.md
-
 # OpenCode 运行时目录
 .opencode/
 packages/*/.opencode/
 
+# Git worktrees
+.worktrees/
+
 # Vibe Kanban 数据目录
 .vk-data/
+
+# 本地计划文档
+docs/plans/
 
 # Windows 临时文件
 nul
