@@ -102,7 +102,9 @@ export class GatewayConnection extends EventEmitter {
   private handleError(err: Error): void {
     console.error('[Gateway] WebSocket error:', err.message);
     this.state.lastError = err.message;
-    this.emit('error', err);
+    if (this.listenerCount('error') > 0) {
+      this.emit('error', err);
+    }
   }
 
   send(msg: GatewayToServerMessage): void {

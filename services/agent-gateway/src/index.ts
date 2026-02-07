@@ -7,32 +7,10 @@
 
 import { GatewayConnection } from './connection.js';
 import { TaskExecutor } from './executor.js';
+import { createGatewayConfig } from './config.js';
 import type { ServerToGatewayMessage, TaskRequest } from './types.js';
 
-const parseAllowedProjectRoots = (): string[] => {
-  const raw = process.env.GATEWAY_ALLOWED_PROJECT_ROOTS;
-  if (!raw) {
-    return [];
-  }
-  return raw
-    .split(',')
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-};
-
-// Configuration from environment variables
-const config = {
-  serverUrl: process.env.GATEWAY_SERVER_URL || 'ws://localhost:3001',
-  hostId: process.env.GATEWAY_HOST_ID || `host-${Date.now()}`,
-  authToken: process.env.GATEWAY_AUTH_TOKEN || 'dev-token',
-  capabilities: {
-    name: process.env.GATEWAY_HOST_NAME || 'Development Host',
-    agents: ['opencode'] as ('opencode' | 'claude-code' | 'gemini')[],
-    maxConcurrent: parseInt(process.env.GATEWAY_MAX_CONCURRENT || '2'),
-    cwd: process.env.GATEWAY_CWD || process.cwd(),
-  },
-  allowedProjectRoots: parseAllowedProjectRoots(),
-};
+const config = createGatewayConfig();
 
 // Create connection
 const connection = new GatewayConnection({
@@ -47,7 +25,7 @@ const connection = new GatewayConnection({
 const executor = new TaskExecutor({
   defaultCwd: config.capabilities.cwd,
   defaultAgent: 'opencode',
-  serverPort: parseInt(process.env.OPENCODE_PORT || '0'), // 0 = 随机端口
+  serverPort: Number.parseInt(process.env.OPENCODE_PORT || '0', 10) || 0, // 0 = 随机端口
   allowedRoots: config.allowedProjectRoots,
 });
 

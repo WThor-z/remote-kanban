@@ -5,6 +5,8 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Query, State,
     },
+    http::{header::AUTHORIZATION, HeaderMap, StatusCode},
+    response::Response,
     response::IntoResponse,
 };
 use futures::{SinkExt, StreamExt};
@@ -14,6 +16,28 @@ use tracing::{debug, error, info, warn};
 
 use super::manager::GatewayManager;
 use super::protocol::*;
+
+const DEFAULT_GATEWAY_AUTH_TOKEN: &str = "dev-token";
+
+fn expected_gateway_auth_token() -> String {
+    std::env::var("GATEWAY_AUTH_TOKEN").unwrap_or_else(|_| DEFAULT_GATEWAY_AUTH_TOKEN.to_string())
+}
+
+fn is_gateway_authorized(headers: &HeaderMap, expected_token: &str) -> bool {
+    let Some(auth_header) = headers.get(AUTHORIZATION) else {
+        return false;
+    };
+
+    let Ok(auth_value) = auth_header.to_str() else {
+        return false;
+    };
+
+    let Some(token) = auth_value.strip_prefix("Bearer ") else {
+        return false;
+    };
+
+    token == expected_token
+}
 
 /// Query parameters for WebSocket connection
 #[derive(Debug, serde::Deserialize)]
@@ -27,9 +51,19 @@ pub async fn gateway_ws_handler(
     ws: WebSocketUpgrade,
     Query(query): Query<WsQuery>,
     State(manager): State<Arc<GatewayManager>>,
-) -> impl IntoResponse {
+    headers: HeaderMap,
+) -> Response {
+    if !is_gateway_authorized(&headers, &expected_gateway_auth_token()) {
+        warn!(
+            "Rejected gateway connection due to invalid token: {}",
+            query.host_id
+        );
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
+
     info!("New gateway connection request from host: {}", query.host_id);
     ws.on_upgrade(move |socket| handle_gateway_socket(socket, query.host_id, manager))
+        .into_response()
 }
 
 /// Handle an individual gateway WebSocket connection
@@ -215,5 +249,42 @@ pub async fn get_host_models_handler(
             )
                 .into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn accepts_matching_bearer_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert("Authorization", HeaderValue::from_static("Bearer secret-token"));
+
+        assert!(is_gateway_authorized(&headers, "secret-token"));
+    }
+
+    #[test]
+    fn rejects_when_authorization_header_is_missing() {
+        let headers = HeaderMap::new();
+
+        assert!(!is_gateway_authorized(&headers, "secret-token"));
+    }
+
+    #[test]
+    fn rejects_when_scheme_is_not_bearer() {
+        let mut headers = HeaderMap::new();
+        headers.insert("Authorization", HeaderValue::from_static("Basic secret-token"));
+
+        assert!(!is_gateway_authorized(&headers, "secret-token"));
+    }
+
+    #[test]
+    fn rejects_when_bearer_token_does_not_match() {
+        let mut headers = HeaderMap::new();
+        headers.insert("Authorization", HeaderValue::from_static("Bearer wrong-token"));
+
+        assert!(!is_gateway_authorized(&headers, "secret-token"));
     }
 }

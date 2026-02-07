@@ -26,6 +26,7 @@ npm-debug.log*
 
 # Environment
 .env
+.env.gateway
 .env.local
 .env.*.local
 

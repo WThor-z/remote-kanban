@@ -104,6 +104,25 @@ describe('GatewayConnection', () => {
     });
   });
 
+  describe('error handling', () => {
+    it('should not throw when no error listener is attached', () => {
+      const conn = new GatewayConnection({
+        serverUrl: `ws://localhost:${serverPort}`,
+        hostId: 'test-host',
+        authToken: 'test-token',
+        capabilities: testCapabilities,
+        reconnect: false,
+      });
+
+      expect(() => {
+        (conn as unknown as { handleError: (err: Error) => void }).handleError(new Error('boom'));
+      }).not.toThrow();
+
+      expect(conn.currentState.lastError).toBe('boom');
+      conn.disconnect();
+    });
+  });
+
   describe('send', () => {
     it('should send messages to server', async () => {
       const conn = createConnection();
