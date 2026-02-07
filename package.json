@@ -25,7 +25,7 @@
     "check:docs:features": "node scripts/check-feature-doc-index.mjs",
     "cleanup:data": "node scripts/cleanup-runtime.mjs --dry-run",
     "cleanup:data:apply": "node scripts/cleanup-runtime.mjs --apply",
-    "test:scripts": "node --test \"scripts/__tests__/*.test.mjs\"",
+    "test:scripts": "node scripts/run-script-tests.mjs",
     "build": "pnpm run build:rust && pnpm run build:ts",
     "build:ts": "pnpm -r run build",
     "build:rust": "cd crates && cargo build --release",
