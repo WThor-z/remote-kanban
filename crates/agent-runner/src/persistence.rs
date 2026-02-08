@@ -539,6 +539,40 @@ mod tests {
     }
 
     #[test]
+    fn test_load_run_without_context_metadata_fields() {
+        let (store, temp_dir) = create_test_store();
+        let task_id = Uuid::new_v4();
+        let run_id = Uuid::new_v4();
+
+        let mut run = Run::new(
+            task_id,
+            AgentType::OpenCode,
+            "Legacy payload".to_string(),
+            "main".to_string(),
+        );
+        run.id = run_id;
+
+        let mut run_json = serde_json::to_value(&run).unwrap();
+        let metadata = run_json["metadata"].as_object_mut().unwrap();
+        metadata.remove("project_id");
+        metadata.remove("workspace_id");
+
+        let run_dir = temp_dir
+            .path()
+            .join("runs")
+            .join(task_id.to_string())
+            .join(run_id.to_string());
+        fs::create_dir_all(&run_dir).unwrap();
+        let run_path = run_dir.join("run.json");
+        fs::write(&run_path, serde_json::to_vec_pretty(&run_json).unwrap()).unwrap();
+
+        let loaded = store.load_run(task_id, run_id).unwrap();
+        assert_eq!(loaded.id, run_id);
+        assert_eq!(loaded.metadata.project_id, None);
+        assert_eq!(loaded.metadata.workspace_id, None);
+    }
+
+    #[test]
     fn test_list_runs() {
         let (store, _temp) = create_test_store();
         let task_id = Uuid::new_v4();

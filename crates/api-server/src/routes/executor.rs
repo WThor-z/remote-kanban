@@ -96,7 +96,7 @@ async fn start_execution(
     );
 
     // Verify task exists
-    let task = state
+    let mut task = state
         .task_store()
         .get(task_id)
         .await
@@ -135,6 +135,32 @@ async fn start_execution(
         )
     })?;
 
+    match task.workspace_id {
+        Some(workspace_id) if workspace_id != project.workspace_id => {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Task workspace {} does not match project workspace {}",
+                        workspace_id, project.workspace_id
+                    ),
+                }),
+            ));
+        }
+        Some(_) => {}
+        None => {
+            task.workspace_id = Some(project.workspace_id);
+            task = state.task_store().update(task).await.map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: e.to_string(),
+                    }),
+                )
+            })?;
+        }
+    }
+
     // Build prompt from task
     let prompt = if let Some(desc) = &task.description {
         format!("{}\n\n{}", task.title, desc)
@@ -164,6 +190,8 @@ async fn start_execution(
         &project.local_path,
         req.model.as_deref(),
         &base_branch,
+        project.id,
+        project.workspace_id,
     )
     .await
 }
@@ -178,6 +206,8 @@ async fn dispatch_to_gateway(
     cwd: &str,
     model: Option<&str>,
     base_branch: &str,
+    project_id: Uuid,
+    workspace_id: Uuid,
 ) -> Result<(StatusCode, Json<ExecutionResponse>), (StatusCode, Json<ErrorResponse>)> {
     let gateway_manager = state.gateway_manager();
 
@@ -189,7 +219,10 @@ async fn dispatch_to_gateway(
         model: model.map(String::from),
         env: HashMap::new(),
         timeout: None,
-        metadata: serde_json::Value::Null,
+        metadata: serde_json::json!({
+            "projectId": project_id,
+            "workspaceId": workspace_id,
+        }),
     };
 
     match gateway_manager
@@ -211,6 +244,8 @@ async fn dispatch_to_gateway(
             );
             // Override the generated ID to use our run_id
             run.id = run_id;
+            run.metadata.project_id = Some(project_id);
+            run.metadata.workspace_id = Some(workspace_id);
             run.mark_started();
             
             // Save the initial run record
@@ -226,6 +261,8 @@ async fn dispatch_to_gateway(
             let prompt_clone = prompt.to_string();
             let agent_type_clone = parsed_agent_type;
             let base_branch = base_branch.to_string();
+            let project_id = project_id;
+            let workspace_id = workspace_id;
             tokio::spawn(async move {
                 let mut event_rx = state_clone.gateway_manager().subscribe();
                 let io = state_clone.get_socket_io().await;
@@ -317,6 +354,8 @@ async fn dispatch_to_gateway(
                                         base_branch.clone(),
                                     );
                                     run.id = run_id;
+                                    run.metadata.project_id = Some(project_id);
+                                    run.metadata.workspace_id = Some(workspace_id);
                                     run.mark_started();
                                     run.mark_completed(0, event.event.content.clone());
                                     run.event_count = event_count;
@@ -394,6 +433,8 @@ async fn dispatch_to_gateway(
                                         base_branch.clone(),
                                     );
                                     run.id = run_id;
+                                    run.metadata.project_id = Some(project_id);
+                                    run.metadata.workspace_id = Some(workspace_id);
                                     run.mark_started();
                                     run.mark_failed(event.event.content.clone().unwrap_or_else(|| "Unknown error".to_string()));
                                     run.event_count = event_count;
@@ -734,6 +775,7 @@ mod tests {
     use vk_core::{
         kanban::KanbanStore,
         project::CreateProjectRequest,
+        workspace::CreateWorkspaceRequest,
         task::{FileTaskStore, Task},
     };
 
@@ -803,7 +845,7 @@ mod tests {
             .await
             .unwrap();
 
-        let app = router().with_state(state);
+        let app = router().with_state(state.clone());
         let response = app
             .oneshot(
                 Request::builder()
@@ -848,8 +890,199 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn start_execution_rejects_mismatched_workspace_binding_with_conflict() {
+        let (state, _temp_dir) = build_state().await;
+        let project_workspace_id = state.workspace_store().list().await[0].id;
+        let mismatched_workspace = state
+            .workspace_store()
+            .create(CreateWorkspaceRequest {
+                name: "other-workspace".to_string(),
+                slug: Some("other-workspace".to_string()),
+                root_path: "/tmp/other-workspace".to_string(),
+                default_project_id: None,
+            })
+            .await
+            .unwrap();
+        let project = state
+            .project_store()
+            .register(
+                Uuid::new_v4(),
+                CreateProjectRequest {
+                    name: "workspace-bound-project".to_string(),
+                    local_path: "/tmp/workspace-bound-project".to_string(),
+                    remote_url: None,
+                    default_branch: None,
+                    worktree_dir: None,
+                    workspace_id: project_workspace_id,
+                },
+            )
+            .await
+            .unwrap();
+        let task = state
+            .task_store()
+            .create(
+                Task::new("Mismatched binding".to_string())
+                    .with_project_binding(project.id, mismatched_workspace.id),
+            )
+            .await
+            .unwrap();
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        state
+            .gateway_manager()
+            .register_host(
+                project.gateway_id.to_string(),
+                HostCapabilities {
+                    name: "Bound host".to_string(),
+                    agents: vec!["opencode".to_string()],
+                    max_concurrent: 2,
+                    cwd: "/tmp".to_string(),
+                    labels: HashMap::new(),
+                },
+                tx,
+            )
+            .await;
+
+        let app = router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/tasks/{}/execute", task.id))
+                    .header("Content-Type", "application/json")
+                    .body(execution_body())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn start_execution_accepts_matching_workspace_binding() {
+        let (state, _temp_dir) = build_state().await;
+        let workspace_id = state.workspace_store().list().await[0].id;
+        let project = state
+            .project_store()
+            .register(
+                Uuid::new_v4(),
+                CreateProjectRequest {
+                    name: "matching-workspace-project".to_string(),
+                    local_path: "/tmp/matching-workspace-project".to_string(),
+                    remote_url: None,
+                    default_branch: None,
+                    worktree_dir: None,
+                    workspace_id,
+                },
+            )
+            .await
+            .unwrap();
+        let task = state
+            .task_store()
+            .create(
+                Task::new("Matching binding".to_string())
+                    .with_project_binding(project.id, project.workspace_id),
+            )
+            .await
+            .unwrap();
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        state
+            .gateway_manager()
+            .register_host(
+                project.gateway_id.to_string(),
+                HostCapabilities {
+                    name: "Bound host".to_string(),
+                    agents: vec!["opencode".to_string()],
+                    max_concurrent: 2,
+                    cwd: "/tmp".to_string(),
+                    labels: HashMap::new(),
+                },
+                tx,
+            )
+            .await;
+
+        let app = router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/tasks/{}/execute", task.id))
+                    .header("Content-Type", "application/json")
+                    .body(execution_body())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn start_execution_backfills_missing_workspace_binding_before_dispatch() {
+        let (state, _temp_dir) = build_state().await;
+        let workspace_id = state.workspace_store().list().await[0].id;
+        let project = state
+            .project_store()
+            .register(
+                Uuid::new_v4(),
+                CreateProjectRequest {
+                    name: "backfill-workspace-project".to_string(),
+                    local_path: "/tmp/backfill-workspace-project".to_string(),
+                    remote_url: None,
+                    default_branch: None,
+                    worktree_dir: None,
+                    workspace_id,
+                },
+            )
+            .await
+            .unwrap();
+        let task = state
+            .task_store()
+            .create(Task::new("Backfill binding".to_string()).with_project_id(project.id))
+            .await
+            .unwrap();
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        state
+            .gateway_manager()
+            .register_host(
+                project.gateway_id.to_string(),
+                HostCapabilities {
+                    name: "Bound host".to_string(),
+                    agents: vec!["opencode".to_string()],
+                    max_concurrent: 2,
+                    cwd: "/tmp".to_string(),
+                    labels: HashMap::new(),
+                },
+                tx,
+            )
+            .await;
+
+        let app = router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/tasks/{}/execute", task.id))
+                    .header("Content-Type", "application/json")
+                    .body(execution_body())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let updated_task = state.task_store().get(task.id).await.unwrap().unwrap();
+        assert_eq!(updated_task.workspace_id, Some(project.workspace_id));
+    }
+
+    #[tokio::test]
     async fn start_execution_with_offline_project_host_returns_conflict() {
         let (state, _temp_dir) = build_state().await;
+        let workspace_id = state.workspace_store().list().await[0].id;
         let project = state
             .project_store()
             .register(
@@ -860,6 +1093,7 @@ mod tests {
                     remote_url: None,
                     default_branch: None,
                     worktree_dir: None,
+                    workspace_id,
                 },
             )
             .await
@@ -889,6 +1123,7 @@ mod tests {
     #[tokio::test]
     async fn start_execution_dispatches_project_cwd_to_bound_host() {
         let (state, _temp_dir) = build_state().await;
+        let workspace_id = state.workspace_store().list().await[0].id;
         let project = state
             .project_store()
             .register(
@@ -899,6 +1134,7 @@ mod tests {
                     remote_url: None,
                     default_branch: Some("develop".to_string()),
                     worktree_dir: None,
+                    workspace_id,
                 },
             )
             .await
@@ -925,7 +1161,7 @@ mod tests {
             )
             .await;
 
-        let app = router().with_state(state);
+        let app = router().with_state(state.clone());
         let response = app
             .oneshot(
                 Request::builder()
@@ -940,12 +1176,22 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::ACCEPTED);
 
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        let run_id = Uuid::parse_str(payload["sessionId"].as_str().unwrap()).unwrap();
+
         let msg = rx.recv().await.unwrap();
         match msg {
             ServerToGatewayMessage::TaskExecute { task } => {
                 assert_eq!(task.cwd, project.local_path);
+                assert_eq!(task.metadata["projectId"], project.id.to_string());
+                assert_eq!(task.metadata["workspaceId"], project.workspace_id.to_string());
             }
             _ => panic!("expected task dispatch message"),
         }
+
+        let run = state.executor().run_store().load_run(task.id, run_id).unwrap();
+        assert_eq!(run.metadata.project_id, Some(project.id));
+        assert_eq!(run.metadata.workspace_id, Some(project.workspace_id));
     }
 }

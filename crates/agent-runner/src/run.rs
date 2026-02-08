@@ -206,6 +206,14 @@ pub struct RunMetadata {
     /// Custom tags
     #[serde(default)]
     pub tags: Vec<String>,
+
+    /// Bound project context for this run
+    #[serde(default)]
+    pub project_id: Option<Uuid>,
+
+    /// Bound workspace context for this run
+    #[serde(default)]
+    pub workspace_id: Option<Uuid>,
 }
 
 impl Run {
@@ -447,12 +455,31 @@ mod tests {
             "Test".to_string(),
             "main".to_string(),
         );
+        let project_id = Uuid::new_v4();
+        let workspace_id = Uuid::new_v4();
 
         run.metadata.files_modified.push("src/main.rs".to_string());
         run.metadata.commands_executed = 5;
         run.metadata.tools_called = 3;
+        run.metadata.project_id = Some(project_id);
+        run.metadata.workspace_id = Some(workspace_id);
 
         assert_eq!(run.metadata.files_modified.len(), 1);
         assert_eq!(run.metadata.commands_executed, 5);
+        assert_eq!(run.metadata.project_id, Some(project_id));
+        assert_eq!(run.metadata.workspace_id, Some(workspace_id));
+    }
+
+    #[test]
+    fn test_run_context_defaults_to_none() {
+        let run = Run::new(
+            Uuid::new_v4(),
+            AgentType::OpenCode,
+            "Test".to_string(),
+            "main".to_string(),
+        );
+
+        assert_eq!(run.metadata.project_id, None);
+        assert_eq!(run.metadata.workspace_id, None);
     }
 }
