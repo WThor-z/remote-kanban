@@ -55,6 +55,7 @@ pub struct UpdateTaskRequest {
 pub struct TaskResponse {
     pub id: Uuid,
     pub project_id: Option<Uuid>,
+    pub workspace_id: Option<Uuid>,
     pub title: String,
     pub description: Option<String>,
     pub status: TaskStatus,
@@ -130,6 +131,7 @@ impl From<Task> for TaskResponse {
         Self {
             id: task.id,
             project_id: task.project_id,
+            workspace_id: task.workspace_id,
             title: task.title,
             description: task.description,
             status: task.status,
@@ -192,17 +194,19 @@ async fn create_task(
         )
     })?;
 
-    let project = state.project_store().get(project_id).await;
-    if project.is_none() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("Project {} not found", project_id),
-            }),
-        ));
-    }
+    let project = match state.project_store().get(project_id).await {
+        Some(project) => project,
+        None => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Project {} not found", project_id),
+                }),
+            ));
+        }
+    };
 
-    let mut task = Task::new(req.title).with_project_id(project_id);
+    let mut task = Task::new(req.title).with_project_binding(project_id, project.workspace_id);
 
     if let Some(desc) = req.description {
         task = task.with_description(desc);
@@ -925,6 +929,7 @@ mod tests {
     #[tokio::test]
     async fn create_task_with_valid_project_sets_project_id() {
         let (state, _temp_dir) = build_state().await;
+        let workspace_id = state.workspace_store().list().await[0].id;
         let project = state
             .project_store()
             .register(
@@ -935,6 +940,7 @@ mod tests {
                     remote_url: None,
                     default_branch: None,
                     worktree_dir: None,
+                    workspace_id,
                 },
             )
             .await
@@ -964,5 +970,6 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let payload: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(payload["projectId"], project.id.to_string());
+        assert_eq!(payload["workspaceId"], workspace_id.to_string());
     }
 }

@@ -11,6 +11,7 @@ pub mod error;
 pub mod kanban;
 pub mod project;
 pub mod task;
+pub mod workspace;
 
 pub use error::Error;
 pub type Result<T> = std::result::Result<T, Error>;

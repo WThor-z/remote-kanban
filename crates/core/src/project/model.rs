@@ -29,6 +29,9 @@ pub struct Project {
     /// ID of the Gateway this project is bound to
     pub gateway_id: Uuid,
 
+    /// ID of the workspace this project belongs to
+    pub workspace_id: Uuid,
+
     /// Directory name for worktrees (relative to project root)
     /// Default: ".worktrees"
     pub worktree_dir: String,
@@ -42,7 +45,12 @@ pub struct Project {
 
 impl Project {
     /// Create a new project with required fields
-    pub fn new(name: impl Into<String>, local_path: impl Into<String>, gateway_id: Uuid) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        local_path: impl Into<String>,
+        gateway_id: Uuid,
+        workspace_id: Uuid,
+    ) -> Self {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4(),
@@ -51,6 +59,7 @@ impl Project {
             remote_url: None,
             default_branch: "main".to_string(),
             gateway_id,
+            workspace_id,
             worktree_dir: ".worktrees".to_string(),
             created_at: now,
             updated_at: now,
@@ -98,6 +107,9 @@ pub struct CreateProjectRequest {
 
     /// Worktree directory (optional, defaults to ".worktrees")
     pub worktree_dir: Option<String>,
+
+    /// Workspace that owns this project
+    pub workspace_id: Uuid,
 }
 
 /// Summary view of a project for listing
@@ -110,6 +122,7 @@ pub struct ProjectSummary {
     pub remote_url: Option<String>,
     pub default_branch: String,
     pub gateway_id: Uuid,
+    pub workspace_id: Uuid,
     pub worktree_dir: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -124,6 +137,7 @@ impl From<&Project> for ProjectSummary {
             remote_url: project.remote_url.clone(),
             default_branch: project.default_branch.clone(),
             gateway_id: project.gateway_id,
+            workspace_id: project.workspace_id,
             worktree_dir: project.worktree_dir.clone(),
             created_at: project.created_at,
             updated_at: project.updated_at,
@@ -138,20 +152,23 @@ mod tests {
     #[test]
     fn test_create_project() {
         let gateway_id = Uuid::new_v4();
-        let project = Project::new("my-project", "/path/to/project", gateway_id);
+        let workspace_id = Uuid::new_v4();
+        let project = Project::new("my-project", "/path/to/project", gateway_id, workspace_id);
 
         assert_eq!(project.name, "my-project");
         assert_eq!(project.local_path, "/path/to/project");
         assert_eq!(project.default_branch, "main");
         assert_eq!(project.worktree_dir, ".worktrees");
         assert_eq!(project.gateway_id, gateway_id);
+        assert_eq!(project.workspace_id, workspace_id);
         assert!(project.remote_url.is_none());
     }
 
     #[test]
     fn test_project_with_builders() {
         let gateway_id = Uuid::new_v4();
-        let project = Project::new("my-project", "/path/to/project", gateway_id)
+        let workspace_id = Uuid::new_v4();
+        let project = Project::new("my-project", "/path/to/project", gateway_id, workspace_id)
             .with_remote_url("git@github.com:user/repo.git")
             .with_default_branch("master")
             .with_worktree_dir(".git-worktrees");
@@ -167,9 +184,20 @@ mod tests {
     #[test]
     fn test_worktrees_path() {
         let gateway_id = Uuid::new_v4();
-        let project = Project::new("my-project", "/path/to/project", gateway_id);
+        let workspace_id = Uuid::new_v4();
+        let project = Project::new("my-project", "/path/to/project", gateway_id, workspace_id);
 
         let expected = std::path::PathBuf::from("/path/to/project/.worktrees");
         assert_eq!(project.worktrees_path(), expected);
+    }
+
+    #[test]
+    fn test_project_summary_includes_workspace_id() {
+        let gateway_id = Uuid::new_v4();
+        let workspace_id = Uuid::new_v4();
+        let project = Project::new("my-project", "/path/to/project", gateway_id, workspace_id);
+
+        let summary = ProjectSummary::from(&project);
+        assert_eq!(summary.workspace_id, workspace_id);
     }
 }

@@ -40,6 +40,7 @@ impl Default for TaskPriority {
 pub struct Task {
     pub id: Uuid,
     pub project_id: Option<Uuid>,
+    pub workspace_id: Option<Uuid>,
     pub title: String,
     pub description: Option<String>,
     pub status: TaskStatus,
@@ -58,6 +59,7 @@ impl Task {
         Self {
             id: Uuid::new_v4(),
             project_id: None,
+            workspace_id: None,
             title: title.into(),
             description: None,
             status: TaskStatus::default(),
@@ -79,6 +81,20 @@ impl Task {
     /// Set the project id
     pub fn with_project_id(mut self, project_id: Uuid) -> Self {
         self.project_id = Some(project_id);
+        self.workspace_id = None;
+        self
+    }
+
+    /// Set the workspace id
+    pub fn with_workspace_id(mut self, workspace_id: Uuid) -> Self {
+        self.workspace_id = Some(workspace_id);
+        self
+    }
+
+    /// Set both project and workspace bindings
+    pub fn with_project_binding(mut self, project_id: Uuid, workspace_id: Uuid) -> Self {
+        self.project_id = Some(project_id);
+        self.workspace_id = Some(workspace_id);
         self
     }
 
@@ -116,6 +132,7 @@ mod tests {
         let task = Task::new("Test task");
         assert_eq!(task.title, "Test task");
         assert!(task.project_id.is_none());
+        assert!(task.workspace_id.is_none());
         assert_eq!(task.status, TaskStatus::Todo);
         assert_eq!(task.priority, TaskPriority::Medium);
         assert!(task.description.is_none());
@@ -127,6 +144,38 @@ mod tests {
         let task = Task::new("Test task").with_project_id(project_id);
 
         assert_eq!(task.project_id, Some(project_id));
+    }
+
+    #[test]
+    fn test_task_with_workspace_id() {
+        let workspace_id = Uuid::new_v4();
+        let task = Task::new("Test task").with_workspace_id(workspace_id);
+
+        assert_eq!(task.workspace_id, Some(workspace_id));
+    }
+
+    #[test]
+    fn test_task_with_project_binding() {
+        let project_id = Uuid::new_v4();
+        let workspace_id = Uuid::new_v4();
+        let task = Task::new("Test task").with_project_binding(project_id, workspace_id);
+
+        assert_eq!(task.project_id, Some(project_id));
+        assert_eq!(task.workspace_id, Some(workspace_id));
+    }
+
+    #[test]
+    fn test_task_with_project_id_clears_existing_workspace_binding() {
+        let project_id_a = Uuid::new_v4();
+        let project_id_b = Uuid::new_v4();
+        let workspace_id = Uuid::new_v4();
+
+        let task = Task::new("Test task")
+            .with_project_binding(project_id_a, workspace_id)
+            .with_project_id(project_id_b);
+
+        assert_eq!(task.project_id, Some(project_id_b));
+        assert!(task.workspace_id.is_none());
     }
 
     #[test]

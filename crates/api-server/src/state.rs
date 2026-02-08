@@ -1,5 +1,6 @@
 //! Application state
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -10,6 +11,7 @@ use git_worktree::WorktreeConfig;
 use vk_core::kanban::KanbanStore;
 use vk_core::project::ProjectStore;
 use vk_core::task::FileTaskStore;
+use vk_core::workspace::{CreateWorkspaceRequest, WorkspaceStore, WorkspaceSummary};
 
 use crate::gateway::GatewayManager;
 
@@ -23,6 +25,7 @@ struct AppStateInner {
     pub task_store: Arc<FileTaskStore>,
     pub kanban_store: Arc<KanbanStore>,
     pub project_store: Arc<ProjectStore>,
+    pub workspace_store: Arc<WorkspaceStore>,
     pub executor: Arc<TaskExecutor>,
     #[allow(dead_code)]
     pub repo_path: PathBuf,
@@ -52,13 +55,34 @@ impl AppState {
         kanban_store: Arc<KanbanStore>,
         gateway_manager: Arc<GatewayManager>,
     ) -> vk_core::Result<Self> {
-        let project_path = data_dir.join("projects.json");
-        let project_store = Arc::new(ProjectStore::new(project_path).await?);
-
         // Get repository path (current directory or from env)
         let repo_path = std::env::var("VK_REPO_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+        let workspace_path = data_dir.join("workspaces.json");
+        let workspace_store = Arc::new(WorkspaceStore::new(workspace_path).await?);
+        let workspace_summaries = workspace_store.list().await;
+        let default_workspace_id = if let Some(workspace) = workspace_summaries
+            .iter()
+            .find(|workspace| workspace.archived_at.is_none())
+        {
+            workspace.id
+        } else {
+            let slug = next_default_workspace_slug(&workspace_summaries);
+            workspace_store
+                .create(CreateWorkspaceRequest {
+                    name: "Default Workspace".to_string(),
+                    slug: Some(slug),
+                    root_path: repo_path.to_string_lossy().to_string(),
+                    default_project_id: None,
+                })
+                .await?
+                .id
+        };
+
+        let project_path = data_dir.join("projects.json");
+        let project_store = Arc::new(ProjectStore::new(project_path, default_workspace_id).await?);
 
         // Create executor config
         let executor_config = ExecutorConfig {
@@ -82,6 +106,7 @@ impl AppState {
                 task_store,
                 kanban_store,
                 project_store,
+                workspace_store,
                 executor: Arc::new(executor),
                 repo_path,
                 socket_io: Arc::new(RwLock::new(None)),
@@ -134,6 +159,17 @@ impl AppState {
         Arc::clone(&self.inner.project_store)
     }
 
+    /// Get reference to the workspace store
+    pub fn workspace_store(&self) -> &WorkspaceStore {
+        &self.inner.workspace_store
+    }
+
+    /// Get shared Arc to the workspace store
+    #[allow(dead_code)]
+    pub fn workspace_store_arc(&self) -> Arc<WorkspaceStore> {
+        Arc::clone(&self.inner.workspace_store)
+    }
+
     /// Get reference to the task executor
     pub fn executor(&self) -> &TaskExecutor {
         &self.inner.executor
@@ -153,5 +189,266 @@ impl AppState {
     /// Get shared Arc to the gateway manager
     pub fn gateway_manager_arc(&self) -> Arc<GatewayManager> {
         Arc::clone(&self.inner.gateway_manager)
+    }
+}
+
+fn next_default_workspace_slug(workspaces: &[WorkspaceSummary]) -> String {
+    let existing: HashSet<&str> = workspaces.iter().map(|workspace| workspace.slug.as_str()).collect();
+    if !existing.contains("default") {
+        return "default".to_string();
+    }
+
+    let mut suffix = 2;
+    loop {
+        let candidate = format!("default-{}", suffix);
+        if !existing.contains(candidate.as_str()) {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use tempfile::TempDir;
+    use vk_core::{
+        kanban::KanbanStore,
+        project::CreateProjectRequest,
+        task::FileTaskStore,
+        workspace::{CreateWorkspaceRequest, WorkspaceStore},
+    };
+    use uuid::Uuid;
+
+    #[tokio::test]
+    async fn app_state_exposes_workspace_store() {
+        let temp_dir = TempDir::new().unwrap();
+        let data_dir = temp_dir.path().to_path_buf();
+
+        let tasks_path = data_dir.join("tasks.json");
+        let task_store = Arc::new(FileTaskStore::new(tasks_path).await.unwrap());
+        let kanban_path = data_dir.join("kanban.json");
+        let kanban_store = Arc::new(
+            KanbanStore::with_task_store(kanban_path, Arc::clone(&task_store))
+                .await
+                .unwrap(),
+        );
+        let gateway_manager = Arc::new(GatewayManager::with_stores(
+            Arc::clone(&task_store),
+            Arc::clone(&kanban_store),
+        ));
+
+        let state = AppState::with_stores(
+            data_dir,
+            Arc::clone(&task_store),
+            Arc::clone(&kanban_store),
+            Arc::clone(&gateway_manager),
+        )
+        .await
+        .unwrap();
+
+        let workspace = state
+            .workspace_store()
+            .create(CreateWorkspaceRequest {
+                name: "Workspace One".to_string(),
+                slug: None,
+                root_path: "/tmp/workspace-one".to_string(),
+                default_project_id: None,
+            })
+            .await
+            .unwrap();
+
+        let loaded = state.workspace_store().get(workspace.id).await;
+        assert!(loaded.is_some());
+    }
+
+    #[tokio::test]
+    async fn app_state_bootstraps_default_workspace_for_project_store() {
+        let temp_dir = TempDir::new().unwrap();
+        let data_dir = temp_dir.path().to_path_buf();
+
+        let tasks_path = data_dir.join("tasks.json");
+        let task_store = Arc::new(FileTaskStore::new(tasks_path).await.unwrap());
+        let kanban_path = data_dir.join("kanban.json");
+        let kanban_store = Arc::new(
+            KanbanStore::with_task_store(kanban_path, Arc::clone(&task_store))
+                .await
+                .unwrap(),
+        );
+        let gateway_manager = Arc::new(GatewayManager::with_stores(
+            Arc::clone(&task_store),
+            Arc::clone(&kanban_store),
+        ));
+
+        let state = AppState::with_stores(
+            data_dir,
+            Arc::clone(&task_store),
+            Arc::clone(&kanban_store),
+            Arc::clone(&gateway_manager),
+        )
+        .await
+        .unwrap();
+
+        let workspaces = state.workspace_store().list().await;
+        assert_eq!(workspaces.len(), 1);
+        let default_workspace_id = workspaces[0].id;
+        assert_eq!(
+            workspaces[0].root_path,
+            state.repo_path().to_string_lossy().to_string()
+        );
+
+        let project = state
+            .project_store()
+            .register(
+                Uuid::new_v4(),
+                CreateProjectRequest {
+                    name: "Project One".to_string(),
+                    local_path: "/tmp/project-one".to_string(),
+                    remote_url: None,
+                    default_branch: None,
+                    worktree_dir: None,
+                    workspace_id: default_workspace_id,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(project.workspace_id, default_workspace_id);
+    }
+
+    #[tokio::test]
+    async fn app_state_bootstraps_active_default_workspace_when_existing_workspaces_are_archived() {
+        let temp_dir = TempDir::new().unwrap();
+        let data_dir = temp_dir.path().to_path_buf();
+
+        let tasks_path = data_dir.join("tasks.json");
+        let task_store = Arc::new(FileTaskStore::new(tasks_path).await.unwrap());
+        let kanban_path = data_dir.join("kanban.json");
+        let kanban_store = Arc::new(
+            KanbanStore::with_task_store(kanban_path, Arc::clone(&task_store))
+                .await
+                .unwrap(),
+        );
+        let gateway_manager = Arc::new(GatewayManager::with_stores(
+            Arc::clone(&task_store),
+            Arc::clone(&kanban_store),
+        ));
+
+        let workspace_store = WorkspaceStore::new(data_dir.join("workspaces.json"))
+            .await
+            .unwrap();
+        let archived_workspace = workspace_store
+            .create(CreateWorkspaceRequest {
+                name: "Archived Workspace".to_string(),
+                slug: Some("archived".to_string()),
+                root_path: "/tmp/archived-workspace".to_string(),
+                default_project_id: None,
+            })
+            .await
+            .unwrap()
+            .archive();
+        let archived_workspace = workspace_store.update(archived_workspace).await.unwrap();
+
+        let project_id = Uuid::new_v4();
+        let gateway_id = Uuid::new_v4();
+        let legacy_project_json = format!(
+            r#"{{
+  "{project_id}": {{
+    "id": "{project_id}",
+    "name": "legacy-project",
+    "local_path": "/path/to/project",
+    "remote_url": null,
+    "default_branch": "main",
+    "gateway_id": "{gateway_id}",
+    "worktree_dir": ".worktrees",
+    "created_at": "2026-02-08T00:00:00Z",
+    "updated_at": "2026-02-08T00:00:00Z"
+  }}
+}}"#
+        );
+        tokio::fs::write(data_dir.join("projects.json"), legacy_project_json)
+            .await
+            .unwrap();
+
+        let state = AppState::with_stores(
+            data_dir,
+            Arc::clone(&task_store),
+            Arc::clone(&kanban_store),
+            Arc::clone(&gateway_manager),
+        )
+        .await
+        .unwrap();
+
+        let workspaces = state.workspace_store().list().await;
+        assert_eq!(workspaces.len(), 2);
+
+        let active_workspace = workspaces
+            .iter()
+            .find(|workspace| workspace.archived_at.is_none())
+            .expect("expected an active workspace")
+            .clone();
+        assert_eq!(active_workspace.slug, "default");
+        assert_eq!(
+            active_workspace.root_path,
+            state.repo_path().to_string_lossy().to_string()
+        );
+        assert_ne!(active_workspace.id, archived_workspace.id);
+
+        let migrated_project = state.project_store().get(project_id).await.unwrap();
+        assert_eq!(migrated_project.workspace_id, active_workspace.id);
+        assert_ne!(migrated_project.workspace_id, archived_workspace.id);
+    }
+
+    #[tokio::test]
+    async fn app_state_bootstraps_unique_default_slug_when_archived_default_exists() {
+        let temp_dir = TempDir::new().unwrap();
+        let data_dir = temp_dir.path().to_path_buf();
+
+        let tasks_path = data_dir.join("tasks.json");
+        let task_store = Arc::new(FileTaskStore::new(tasks_path).await.unwrap());
+        let kanban_path = data_dir.join("kanban.json");
+        let kanban_store = Arc::new(
+            KanbanStore::with_task_store(kanban_path, Arc::clone(&task_store))
+                .await
+                .unwrap(),
+        );
+        let gateway_manager = Arc::new(GatewayManager::with_stores(
+            Arc::clone(&task_store),
+            Arc::clone(&kanban_store),
+        ));
+
+        let workspace_store = WorkspaceStore::new(data_dir.join("workspaces.json"))
+            .await
+            .unwrap();
+        let archived_default = workspace_store
+            .create(CreateWorkspaceRequest {
+                name: "Archived Default".to_string(),
+                slug: Some("default".to_string()),
+                root_path: "/tmp/archived-default".to_string(),
+                default_project_id: None,
+            })
+            .await
+            .unwrap()
+            .archive();
+        workspace_store.update(archived_default).await.unwrap();
+
+        let state = AppState::with_stores(
+            data_dir,
+            Arc::clone(&task_store),
+            Arc::clone(&kanban_store),
+            Arc::clone(&gateway_manager),
+        )
+        .await
+        .unwrap();
+
+        let workspaces = state.workspace_store().list().await;
+        assert_eq!(workspaces.len(), 2);
+
+        let active_workspace = workspaces
+            .iter()
+            .find(|workspace| workspace.archived_at.is_none())
+            .expect("expected an active workspace");
+        assert_eq!(active_workspace.slug, "default-2");
     }
 }

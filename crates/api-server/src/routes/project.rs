@@ -28,6 +28,7 @@ pub struct ProjectDetailResponse {
     pub remote_url: Option<String>,
     pub default_branch: String,
     pub gateway_id: String,
+    pub workspace_id: String,
     pub worktree_dir: String,
 }
 
@@ -52,6 +53,7 @@ async fn get_project(
         remote_url: project.remote_url,
         default_branch: project.default_branch,
         gateway_id: project.gateway_id.to_string(),
+        workspace_id: project.workspace_id.to_string(),
         worktree_dir: project.worktree_dir,
     }))
 }
@@ -104,6 +106,7 @@ async fn update_project(
         remote_url: updated.remote_url,
         default_branch: updated.default_branch,
         gateway_id: updated.gateway_id.to_string(),
+        workspace_id: updated.workspace_id.to_string(),
         worktree_dir: updated.worktree_dir,
     }))
 }
@@ -116,4 +119,198 @@ pub fn router() -> Router<AppState> {
             "/api/projects/{id}",
             get(get_project).put(update_project),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use axum::{
+        body::{to_bytes, Body},
+        http::Request,
+    };
+    use serde_json::Value;
+    use tempfile::TempDir;
+    use tower::ServiceExt;
+    use uuid::Uuid;
+    use vk_core::{
+        kanban::KanbanStore,
+        project::CreateProjectRequest,
+        task::FileTaskStore,
+        workspace::CreateWorkspaceRequest,
+    };
+
+    use crate::{gateway::GatewayManager, state::AppState};
+
+    async fn build_state() -> (AppState, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let data_dir = temp_dir.path().to_path_buf();
+
+        let tasks_path = data_dir.join("tasks.json");
+        let task_store = Arc::new(FileTaskStore::new(tasks_path).await.unwrap());
+        let kanban_path = data_dir.join("kanban.json");
+        let kanban_store = Arc::new(
+            KanbanStore::with_task_store(kanban_path, Arc::clone(&task_store))
+                .await
+                .unwrap(),
+        );
+        let gateway_manager = Arc::new(GatewayManager::with_stores(
+            Arc::clone(&task_store),
+            Arc::clone(&kanban_store),
+        ));
+
+        let state = AppState::with_stores(
+            data_dir,
+            Arc::clone(&task_store),
+            Arc::clone(&kanban_store),
+            Arc::clone(&gateway_manager),
+        )
+        .await
+        .unwrap();
+
+        (state, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn list_projects_includes_workspace_id() {
+        let (state, _temp_dir) = build_state().await;
+        let workspace = state
+            .workspace_store()
+            .create(CreateWorkspaceRequest {
+                name: "Workspace One".to_string(),
+                slug: None,
+                root_path: "/tmp/workspace-one".to_string(),
+                default_project_id: None,
+            })
+            .await
+            .unwrap();
+
+        let project = state
+            .project_store()
+            .register(
+                Uuid::new_v4(),
+                CreateProjectRequest {
+                    name: "list-project".to_string(),
+                    local_path: "/tmp/list-project".to_string(),
+                    remote_url: None,
+                    default_branch: None,
+                    worktree_dir: None,
+                    workspace_id: workspace.id,
+                },
+            )
+            .await
+            .unwrap();
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/projects")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        let listed = payload
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == project.id.to_string())
+            .unwrap();
+        assert_eq!(listed["workspaceId"], workspace.id.to_string());
+    }
+
+    #[tokio::test]
+    async fn get_project_includes_workspace_id() {
+        let (state, _temp_dir) = build_state().await;
+        let workspace = state
+            .workspace_store()
+            .create(CreateWorkspaceRequest {
+                name: "Workspace One".to_string(),
+                slug: None,
+                root_path: "/tmp/workspace-one".to_string(),
+                default_project_id: None,
+            })
+            .await
+            .unwrap();
+
+        let project = state
+            .project_store()
+            .register(
+                Uuid::new_v4(),
+                CreateProjectRequest {
+                    name: "detail-project".to_string(),
+                    local_path: "/tmp/detail-project".to_string(),
+                    remote_url: None,
+                    default_branch: None,
+                    worktree_dir: None,
+                    workspace_id: workspace.id,
+                },
+            )
+            .await
+            .unwrap();
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/projects/{}", project.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["workspaceId"], workspace.id.to_string());
+    }
+
+    #[tokio::test]
+    async fn get_project_with_invalid_id_returns_bad_request() {
+        let (state, _temp_dir) = build_state().await;
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/projects/not-a-uuid")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn get_project_with_missing_id_returns_not_found() {
+        let (state, _temp_dir) = build_state().await;
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/projects/{}", Uuid::new_v4()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 }

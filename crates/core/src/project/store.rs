@@ -5,6 +5,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -24,22 +26,58 @@ pub struct ProjectStore {
 
 impl ProjectStore {
     /// Create a new ProjectStore with the given file path
-    pub async fn new(file_path: PathBuf) -> Result<Self> {
-        let projects = if file_path.exists() {
+    pub async fn new(file_path: PathBuf, default_workspace_id: Uuid) -> Result<Self> {
+        let (projects, migrated_legacy_projects) = if file_path.exists() {
             let content = tokio::fs::read_to_string(&file_path).await.map_err(|e| {
                 Error::Storage(format!("Failed to read projects file: {}", e))
             })?;
-            serde_json::from_str(&content).map_err(|e| {
+            let loaded: HashMap<Uuid, StoredProject> = serde_json::from_str(&content).map_err(|e| {
                 Error::Storage(format!("Failed to parse projects file: {}", e))
-            })?
+            })?;
+
+            let mut migrated = false;
+            let projects = loaded
+                .into_values()
+                .map(|project| {
+                    let workspace_id = match project.workspace_id {
+                        Some(workspace_id) => workspace_id,
+                        None => {
+                            migrated = true;
+                            default_workspace_id
+                        }
+                    };
+                    (
+                        project.id,
+                        Project {
+                            id: project.id,
+                            name: project.name,
+                            local_path: project.local_path,
+                            remote_url: project.remote_url,
+                            default_branch: project.default_branch,
+                            gateway_id: project.gateway_id,
+                            workspace_id,
+                            worktree_dir: project.worktree_dir,
+                            created_at: project.created_at,
+                            updated_at: project.updated_at,
+                        },
+                    )
+                })
+                .collect();
+            (projects, migrated)
         } else {
-            HashMap::new()
+            (HashMap::new(), false)
         };
 
-        Ok(Self {
+        let store = Self {
             projects: Arc::new(RwLock::new(projects)),
             file_path,
-        })
+        };
+
+        if migrated_legacy_projects {
+            store.persist().await?;
+        }
+
+        Ok(store)
     }
 
     /// Create or update a project from a Gateway registration request
@@ -63,6 +101,7 @@ impl ProjectStore {
             let mut updated = existing.clone();
             updated.name = request.name;
             updated.remote_url = request.remote_url;
+            updated.workspace_id = request.workspace_id;
             if let Some(branch) = request.default_branch {
                 updated.default_branch = branch;
             }
@@ -74,7 +113,12 @@ impl ProjectStore {
             updated
         } else {
             // Create new project
-            let mut project = Project::new(request.name, request.local_path, gateway_id);
+            let mut project = Project::new(
+                request.name,
+                request.local_path,
+                gateway_id,
+                request.workspace_id,
+            );
             if let Some(url) = request.remote_url {
                 project = project.with_remote_url(url);
             }
@@ -185,8 +229,9 @@ mod tests {
     async fn test_create_project_store() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("projects.json");
+        let default_workspace_id = Uuid::new_v4();
 
-        let store = ProjectStore::new(path).await.unwrap();
+        let store = ProjectStore::new(path, default_workspace_id).await.unwrap();
         let projects = store.list().await;
 
         assert_eq!(projects.len(), 0);
@@ -196,9 +241,11 @@ mod tests {
     async fn test_register_project() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("projects.json");
+        let default_workspace_id = Uuid::new_v4();
 
-        let store = ProjectStore::new(path.clone()).await.unwrap();
+        let store = ProjectStore::new(path.clone(), default_workspace_id).await.unwrap();
         let gateway_id = Uuid::new_v4();
+        let workspace_id = Uuid::new_v4();
 
         let request = CreateProjectRequest {
             name: "test-project".to_string(),
@@ -206,26 +253,31 @@ mod tests {
             remote_url: Some("git@github.com:user/repo.git".to_string()),
             default_branch: Some("main".to_string()),
             worktree_dir: None,
+            workspace_id,
         };
 
         let project = store.register(gateway_id, request).await.unwrap();
 
         assert_eq!(project.name, "test-project");
         assert_eq!(project.gateway_id, gateway_id);
+        assert_eq!(project.workspace_id, workspace_id);
 
         // Verify persistence
-        let store2 = ProjectStore::new(path).await.unwrap();
+        let store2 = ProjectStore::new(path, default_workspace_id).await.unwrap();
         let projects = store2.list().await;
         assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].workspace_id, workspace_id);
     }
 
     #[tokio::test]
     async fn test_register_project_updates_existing() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("projects.json");
+        let default_workspace_id = Uuid::new_v4();
 
-        let store = ProjectStore::new(path).await.unwrap();
+        let store = ProjectStore::new(path, default_workspace_id).await.unwrap();
         let gateway_id = Uuid::new_v4();
+        let workspace_id = Uuid::new_v4();
 
         let request1 = CreateProjectRequest {
             name: "project-v1".to_string(),
@@ -233,6 +285,7 @@ mod tests {
             remote_url: None,
             default_branch: None,
             worktree_dir: None,
+            workspace_id,
         };
 
         let project1 = store.register(gateway_id, request1).await.unwrap();
@@ -244,6 +297,7 @@ mod tests {
             remote_url: Some("git@github.com:user/repo.git".to_string()),
             default_branch: None,
             worktree_dir: None,
+            workspace_id,
         };
 
         let project2 = store.register(gateway_id, request2).await.unwrap();
@@ -252,8 +306,94 @@ mod tests {
         assert_eq!(project1.id, project2.id);
         assert_eq!(project2.name, "project-v2");
         assert!(project2.remote_url.is_some());
+        assert_eq!(project2.workspace_id, workspace_id);
 
         let projects = store.list().await;
         assert_eq!(projects.len(), 1);
     }
+
+    #[tokio::test]
+    async fn test_register_updates_existing_workspace_id() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("projects.json");
+        let default_workspace_id = Uuid::new_v4();
+
+        let store = ProjectStore::new(path, default_workspace_id).await.unwrap();
+        let gateway_id = Uuid::new_v4();
+        let workspace_id_1 = Uuid::new_v4();
+        let workspace_id_2 = Uuid::new_v4();
+
+        let first = CreateProjectRequest {
+            name: "project-v1".to_string(),
+            local_path: "/path/to/project".to_string(),
+            remote_url: None,
+            default_branch: None,
+            worktree_dir: None,
+            workspace_id: workspace_id_1,
+        };
+        let project1 = store.register(gateway_id, first).await.unwrap();
+
+        let second = CreateProjectRequest {
+            name: "project-v2".to_string(),
+            local_path: "/path/to/project".to_string(),
+            remote_url: None,
+            default_branch: None,
+            worktree_dir: None,
+            workspace_id: workspace_id_2,
+        };
+        let project2 = store.register(gateway_id, second).await.unwrap();
+
+        assert_eq!(project1.id, project2.id);
+        assert_eq!(project2.workspace_id, workspace_id_2);
+    }
+
+    #[tokio::test]
+    async fn test_new_migrates_legacy_projects_without_workspace_id() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("projects.json");
+        let default_workspace_id = Uuid::new_v4();
+        let project_id = Uuid::new_v4();
+        let gateway_id = Uuid::new_v4();
+
+        let legacy_json = format!(
+            r#"{{
+  "{project_id}": {{
+    "id": "{project_id}",
+    "name": "legacy-project",
+    "local_path": "/path/to/project",
+    "remote_url": null,
+    "default_branch": "main",
+    "gateway_id": "{gateway_id}",
+    "worktree_dir": ".worktrees",
+    "created_at": "2026-02-08T00:00:00Z",
+    "updated_at": "2026-02-08T00:00:00Z"
+  }}
+}}"#
+        );
+
+        tokio::fs::write(&path, legacy_json).await.unwrap();
+
+        let store = ProjectStore::new(path.clone(), default_workspace_id)
+            .await
+            .unwrap();
+        let project = store.get(project_id).await.unwrap();
+        assert_eq!(project.workspace_id, default_workspace_id);
+
+        let persisted = tokio::fs::read_to_string(&path).await.unwrap();
+        assert!(persisted.contains(&format!("\"workspace_id\": \"{}\"", default_workspace_id)));
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct StoredProject {
+    id: Uuid,
+    name: String,
+    local_path: String,
+    remote_url: Option<String>,
+    default_branch: String,
+    gateway_id: Uuid,
+    workspace_id: Option<Uuid>,
+    worktree_dir: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
 }
