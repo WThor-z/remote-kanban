@@ -83,7 +83,7 @@ export const KanbanBoard = ({ board, onMoveTask, onDeleteTask, onTaskClick, exec
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
     >
-      <div className="grid grid-cols-3 gap-4 w-full">
+      <div data-testid="kanban-grid" className="kanban-grid">
         {board.columnOrder.map((columnId) => {
           const column = board.columns[columnId];
           const tasks = column.taskIds.map((taskId) => board.tasks[taskId]).filter(Boolean);

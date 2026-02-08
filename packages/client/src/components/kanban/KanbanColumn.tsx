@@ -18,26 +18,21 @@ export const KanbanColumn = ({ column, tasks, onDeleteTask, onTaskClick, executi
   });
 
   const columnColors = {
-    todo: 'bg-slate-500/20 border-slate-500/30',
-    doing: 'bg-amber-500/20 border-amber-500/30',
-    done: 'bg-emerald-500/20 border-emerald-500/30',
+    todo: 'kanban-column--todo',
+    doing: 'kanban-column--doing',
+    done: 'kanban-column--done',
   } as const;
 
   return (
     <div
       ref={setNodeRef}
-      className={`
-        flex flex-col rounded-xl border p-4 min-h-[400px]
-        ${columnColors[column.id]}
-        ${isOver ? 'ring-2 ring-indigo-500/50' : ''}
-        transition-all duration-200
-      `}
+      className={`kanban-column ${columnColors[column.id]} ${isOver ? 'kanban-column--active' : ''}`}
     >
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-slate-200">{column.title}</h3>
+      <div className="kanban-column__header">
+        <h3 className="kanban-column__title">{column.title}</h3>
         <span
           data-testid="column-count"
-          className="text-xs px-2 py-0.5 rounded-full bg-slate-700 text-slate-300"
+          className="column-count-badge"
         >
           {tasks.length}
         </span>
@@ -45,9 +40,9 @@ export const KanbanColumn = ({ column, tasks, onDeleteTask, onTaskClick, executi
 
       <div className="flex flex-col gap-2 flex-1">
         {tasks.length === 0 ? (
-          <div className="text-xs text-slate-500 text-center py-8">暂无任务</div>
+          <div className="kanban-empty">暂无任务</div>
         ) : (
-tasks.map((task) => (
+          tasks.map((task) => (
             <SortableTaskCard 
               key={task.id} 
               task={task} 

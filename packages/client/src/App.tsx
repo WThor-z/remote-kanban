@@ -10,12 +10,26 @@ import { TaskDetailPanel, CreateTaskModal } from './components/task';
 import type { KanbanTask, AgentType } from '@opencode-vibe/protocol';
 import { useGatewayInfo } from './hooks/useGatewayInfo';
 import { resolveApiBaseUrl, resolveGatewaySocketUrl } from './config/endpoints';
+import { getConsoleLexiconSection } from './lexicon/consoleLexicon';
+
+const SKIN_STORAGE_KEY = 'vk-console-skin';
+
+const readStoredSkin = (): 'neural' | 'lab' => {
+  if (typeof window === 'undefined') {
+    return 'neural';
+  }
+
+  return window.localStorage.getItem(SKIN_STORAGE_KEY) === 'lab' ? 'lab' : 'neural';
+};
 
 function App() {
   const { isConnected, socket } = useOpencode();
   const { board, moveTask, deleteTask, requestSync } = useKanban();
   const [selectedTask, setSelectedTask] = useState<KanbanTask | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [skin, setSkin] = useState<'neural' | 'lab'>(readStoredSkin);
+  const sharedCopy = getConsoleLexiconSection('shared');
+  const appCopy = getConsoleLexiconSection('app');
 
   const gatewaySocketUrl = resolveGatewaySocketUrl();
   const apiBaseUrl = resolveApiBaseUrl();
@@ -184,104 +198,123 @@ function App() {
     sendMessage(taskId, content);
   };
 
+  const isLabSkin = skin === 'lab';
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(SKIN_STORAGE_KEY, skin);
+    }
+  }, [skin]);
+
   return (
-    <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center p-6 gap-8">
-      <div className="w-full max-w-6xl bg-slate-800 p-8 rounded-xl shadow-2xl border border-slate-700 text-center space-y-6">
-        <div className="flex justify-center">
-          <div className="bg-indigo-600 p-4 rounded-full shadow-lg shadow-indigo-500/20">
-            <Bot size={48} className="text-white" />
-          </div>
-        </div>
+    <div className={`console-root ${isLabSkin ? 'console-root--lab' : ''}`}>
+      <div className="console-shell">
+        <section className="tech-panel command-panel reveal">
+          <div className="command-panel__top">
+            <div>
+              <p className="tech-kicker inline-flex items-center gap-2">
+                <Bot size={14} /> {appCopy.kicker}
+              </p>
+              <h1 className="tech-title">{appCopy.title}</h1>
+              <p className="tech-subtle">
+                {appCopy.subtitle}
+              </p>
 
-        <h1 className="text-4xl font-bold bg-gradient-to-r from-indigo-400 to-cyan-400 bg-clip-text text-transparent">
-          OpenCode Vibe Kanban
-        </h1>
-
-        <p className="text-slate-400 text-lg">
-          AI-Powered Development with Visual Task Management
-        </p>
-
-        {/* Create Task Button */}
-        <button
-          type="button"
-          onClick={() => setIsCreateModalOpen(true)}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium transition-colors shadow-lg shadow-indigo-500/20"
-          title="Create new task (Press 'c')"
-        >
-          <Plus size={18} />
-          New Task
-        </button>
-
-        <div className={`inline-flex items-center px-4 py-2 rounded-full text-sm font-medium ${
-          isConnected 
-            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
-            : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-        }`}>
-          <span className={`w-2 h-2 rounded-full mr-2 ${
-            isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'
-          }`}></span>
-          {isConnected ? 'Gateway Connected' : 'Gateway Disconnected'}
-        </div>
-      </div>
-
-      {/* Gateway Status */}
-      <div className="w-full max-w-6xl bg-slate-800/60 border border-slate-700/60 rounded-xl p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-          <div className="flex items-center gap-2 text-slate-200">
-            <Server size={18} className="text-indigo-400" />
-            <span className="font-semibold">Gateway Status</span>
-            {gatewayInfo?.version && (
-              <span className="text-xs text-slate-400">v{gatewayInfo.version}</span>
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={refreshGatewayInfo}
-            className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-semibold rounded-full bg-slate-700/70 text-slate-200 hover:bg-slate-600"
-          >
-            <RefreshCw size={12} className={gatewayInfoLoading ? 'animate-spin' : ''} />
-            Refresh
-          </button>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
-          <div className="bg-slate-900/40 border border-slate-700/60 rounded-lg p-3">
-            <div className="text-xs text-slate-400 mb-1">Socket</div>
-            <div className="text-slate-200 break-all font-mono text-xs">{gatewaySocketUrl}</div>
-          </div>
-          <div className="bg-slate-900/40 border border-slate-700/60 rounded-lg p-3">
-            <div className="text-xs text-slate-400 mb-1">REST API</div>
-            <div className="text-slate-200 break-all font-mono text-xs">{apiBaseUrl}</div>
-          </div>
-          <div className="bg-slate-900/40 border border-slate-700/60 rounded-lg p-3">
-            <div className="flex items-center gap-1 text-xs text-slate-400 mb-1">
-              <Plug size={12} /> Worker
+              <div className="command-panel__labels" aria-label="command lexicon">
+                <span className="command-chip">{sharedCopy.chips.directive}</span>
+                <span className="command-chip">{sharedCopy.chips.telemetry}</span>
+                <span className="command-chip">{sharedCopy.chips.missionLane}</span>
+              </div>
             </div>
-            <div className="text-slate-200 break-all font-mono text-xs">{gatewayInfo?.workerUrl || 'unknown'}</div>
-          </div>
-          <div className="bg-slate-900/40 border border-slate-700/60 rounded-lg p-3">
-            <div className="flex items-center gap-1 text-xs text-slate-400 mb-1">
-              <HardDrive size={12} /> Data Dir
+
+            <div className={`status-beacon ${isConnected ? 'status-beacon--online' : 'status-beacon--offline'}`}>
+              <span className="status-beacon__dot" aria-hidden="true" />
+              {isConnected ? sharedCopy.status.gatewayOnline : sharedCopy.status.gatewayOffline}
             </div>
-            <div className="text-slate-200 break-all font-mono text-xs">{gatewayInfo?.dataDir || 'unknown'}</div>
           </div>
-        </div>
-        {gatewayInfoError && (
-          <div className="mt-3 text-xs text-rose-400">{gatewayInfoError}</div>
-        )}
-      </div>
 
-      {/* Kanban Board */}
-      <div className="w-full max-w-6xl">
-        <KanbanBoard 
-          board={board} 
-          onMoveTask={moveTask} 
-          onDeleteTask={deleteTask}
-          onTaskClick={handleTaskClick}
-          executingTaskIds={executingTaskIds}
-        />
-      </div>
+          <div className="command-panel__actions">
+            <button
+              type="button"
+              onClick={() => setIsCreateModalOpen(true)}
+              className="tech-btn tech-btn-primary"
+              title="Create new task (Press 'c')"
+            >
+              <Plus size={16} /> {appCopy.actions.createTask}
+            </button>
+            <button
+              type="button"
+              onClick={refreshGatewayInfo}
+              className="tech-btn tech-btn-secondary"
+            >
+              <RefreshCw size={14} className={gatewayInfoLoading ? 'animate-spin' : ''} /> {appCopy.actions.syncTelemetry}
+            </button>
+            <button
+              type="button"
+              className="tech-btn tech-btn-secondary"
+              onClick={() => setSkin((prev) => (prev === 'lab' ? 'neural' : 'lab'))}
+            >
+              {isLabSkin ? sharedCopy.skin.backToNeural : sharedCopy.skin.switchToLab}
+            </button>
+          </div>
+        </section>
 
-      {/* Task Detail Panel (Modal) */}
+        <section className="tech-panel gateway-panel reveal reveal-1">
+          <div className="section-bar">
+            <div className="flex items-center gap-2">
+              <Server size={16} className="text-cyan-300" />
+              <h2 className="section-title">{appCopy.sections.gatewayTitle}</h2>
+              {gatewayInfo?.version && <span className="section-note">v{gatewayInfo.version}</span>}
+            </div>
+            <p className="section-note">{appCopy.sections.gatewayNote}</p>
+          </div>
+
+          <div className="gateway-grid">
+            <div className="gateway-card">
+              <div className="gateway-label">Socket</div>
+              <div className="gateway-value gateway-value--mono">{gatewaySocketUrl}</div>
+            </div>
+
+            <div className="gateway-card">
+              <div className="gateway-label">REST API</div>
+              <div className="gateway-value gateway-value--mono">{apiBaseUrl}</div>
+            </div>
+
+            <div className="gateway-card">
+              <div className="gateway-label">
+                <Plug size={12} /> Worker
+              </div>
+              <div className="gateway-value gateway-value--mono">{gatewayInfo?.workerUrl || 'unknown'}</div>
+            </div>
+
+            <div className="gateway-card">
+              <div className="gateway-label">
+                <HardDrive size={12} /> Data Dir
+              </div>
+              <div className="gateway-value gateway-value--mono">{gatewayInfo?.dataDir || 'unknown'}</div>
+            </div>
+          </div>
+
+          {gatewayInfoError && <div className="gateway-error">{gatewayInfoError}</div>}
+        </section>
+
+        <section className="tech-panel board-panel reveal reveal-2">
+          <div className="section-bar">
+            <h2 className="section-title">{appCopy.sections.boardTitle}</h2>
+            <p className="section-note">
+              {Object.keys(board.tasks).length} {appCopy.sections.boardCounterSuffix}
+            </p>
+          </div>
+
+          <KanbanBoard
+            board={board}
+            onMoveTask={moveTask}
+            onDeleteTask={deleteTask}
+            onTaskClick={handleTaskClick}
+            executingTaskIds={executingTaskIds}
+          />
+        </section>
+
       {selectedTask && (
         <TaskDetailPanel
           task={selectedTask}
@@ -304,15 +337,15 @@ function App() {
         />
       )}
 
-      {/* Create Task Modal */}
-      <CreateTaskModal
-        isOpen={isCreateModalOpen}
-        onClose={handleCloseCreateModal}
-        onCreate={handleCreateTask}
-        onCreateAndStart={handleCreateAndStartTask}
-        isLoading={isTaskApiLoading}
-        error={taskApiError}
-      />
+        <CreateTaskModal
+          isOpen={isCreateModalOpen}
+          onClose={handleCloseCreateModal}
+          onCreate={handleCreateTask}
+          onCreateAndStart={handleCreateAndStartTask}
+          isLoading={isTaskApiLoading}
+          error={taskApiError}
+        />
+      </div>
     </div>
   )
 }

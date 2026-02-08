@@ -3,21 +3,24 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTaskRuns, type RunStatus } from '../../hooks/useTaskRuns';
 import { useRunEvents } from '../../hooks/useRunEvents';
 import { ExecutionEventList } from '../execution/ExecutionEventList';
+import { CONSOLE_LEXICON } from '../../lexicon/consoleLexicon';
 
 interface Props {
   taskId: string;
 }
 
+const copy = CONSOLE_LEXICON.runHistoryPanel;
+
 const statusConfig: Record<RunStatus, { label: string; color: string; dot: string }> = {
-  initializing: { label: '初始化', color: 'text-slate-400', dot: 'bg-slate-500' },
-  creating_worktree: { label: '创建工作区', color: 'text-amber-400', dot: 'bg-amber-400' },
-  starting: { label: '启动中', color: 'text-amber-400', dot: 'bg-amber-400' },
-  running: { label: '运行中', color: 'text-indigo-400', dot: 'bg-indigo-400' },
-  paused: { label: '暂停', color: 'text-amber-400', dot: 'bg-amber-400' },
-  completed: { label: '完成', color: 'text-emerald-400', dot: 'bg-emerald-400' },
-  failed: { label: '失败', color: 'text-rose-400', dot: 'bg-rose-400' },
-  cancelled: { label: '已取消', color: 'text-slate-400', dot: 'bg-slate-500' },
-  cleaning_up: { label: '清理中', color: 'text-slate-400', dot: 'bg-slate-500' },
+  initializing: { label: copy.statuses.initializing, color: 'text-slate-400', dot: 'bg-slate-500' },
+  creating_worktree: { label: copy.statuses.creating_worktree, color: 'text-amber-400', dot: 'bg-amber-400' },
+  starting: { label: copy.statuses.starting, color: 'text-amber-400', dot: 'bg-amber-400' },
+  running: { label: copy.statuses.running, color: 'text-indigo-400', dot: 'bg-indigo-400' },
+  paused: { label: copy.statuses.paused, color: 'text-amber-400', dot: 'bg-amber-400' },
+  completed: { label: copy.statuses.completed, color: 'text-emerald-400', dot: 'bg-emerald-400' },
+  failed: { label: copy.statuses.failed, color: 'text-rose-400', dot: 'bg-rose-400' },
+  cancelled: { label: copy.statuses.cancelled, color: 'text-slate-400', dot: 'bg-slate-500' },
+  cleaning_up: { label: copy.statuses.cleaning_up, color: 'text-slate-400', dot: 'bg-slate-500' },
 };
 
 export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
@@ -54,8 +57,8 @@ export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
   );
 
   return (
-    <div className="flex flex-col h-full bg-slate-900 text-slate-300 overflow-hidden rounded-lg border border-slate-800">
-      <div className="flex items-center px-4 py-2 bg-slate-950 border-b border-slate-800">
+    <div className="log-shell">
+      <div className="log-shell__head">
         {selectedRunId ? (
           <button
             type="button"
@@ -68,7 +71,7 @@ export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
         ) : (
           <History className="w-4 h-4 mr-2" />
         )}
-        <span className="font-semibold">{selectedRunId ? 'Run Events' : 'Run History'}</span>
+        <span className="font-semibold">{selectedRunId ? copy.titleTimeline : copy.titleHistory}</span>
         <div className="ml-auto flex items-center gap-2 text-xs text-slate-500">
           {!selectedRunId && <span>{runs.length} Runs</span>}
           <button
@@ -82,19 +85,19 @@ export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      <div className="log-shell__body space-y-3">
         {!selectedRunId && (
           <>
             {isLoading && runs.length === 0 && (
               <div className="flex items-center justify-center py-8 text-slate-500">
                 <RefreshCcw className="w-4 h-4 mr-2 animate-spin" />
-                加载中...
+                {copy.labels.loadingRuns}
               </div>
             )}
 
             {!isLoading && runs.length === 0 && !error && (
               <div className="text-center py-8 text-slate-500">
-                暂无执行记录
+                {copy.labels.noRuns}
               </div>
             )}
 
@@ -111,7 +114,7 @@ export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
                   key={run.id}
                   type="button"
                   onClick={() => setSelectedRunId(run.id)}
-                  className="w-full text-left bg-slate-900/60 border border-slate-800 rounded-lg p-3 hover:border-slate-700 transition-colors"
+                  className="run-list-item w-full text-left hover:border-slate-600 transition-colors"
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
@@ -125,7 +128,7 @@ export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
                   </div>
 
                   <div className="mt-2 text-sm text-slate-200">
-                    {run.promptPreview || '（无提示内容）'}
+                    {run.promptPreview || copy.labels.noPrompt}
                   </div>
 
                   <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate-500">
@@ -133,7 +136,7 @@ export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
                     <span>Events: {run.eventCount}</span>
                     <span className="flex items-center gap-1">
                       <Clock className="w-3 h-3" />
-                      {run.startedAt ? formatDate(run.startedAt) : '未开始'}
+                      {run.startedAt ? formatDate(run.startedAt) : copy.labels.notStarted}
                     </span>
                   </div>
                 </button>
@@ -145,24 +148,24 @@ export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
         {selectedRunId && (
           <>
             {selectedRun && (
-              <div className="bg-slate-900/60 border border-slate-800 rounded-lg p-3">
+              <div className="run-list-item">
                 <div className="flex items-center justify-between text-xs text-slate-500">
                   <span>Run {selectedRun.id.slice(0, 8)}</span>
                   <span>{formatDate(selectedRun.createdAt)}</span>
                 </div>
                 <div className="mt-2 text-sm text-slate-200">
-                  {selectedRun.promptPreview || '（无提示内容）'}
+                  {selectedRun.promptPreview || copy.labels.noPrompt}
                 </div>
               </div>
             )}
 
-            <div className="flex flex-wrap gap-2 text-xs text-slate-400">
+            <div className="run-filter text-xs text-slate-400">
               <label className="flex items-center gap-2">
-                <span>Event</span>
+                <span>{copy.labels.eventFilterLabel}</span>
                 <select
                   value={eventType}
                   onChange={(e) => setEventType(e.target.value)}
-                  className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200"
+                  className="inline-select"
                 >
                   <option value="">All</option>
                   <option value="agent_event">Agent</option>
@@ -174,12 +177,12 @@ export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
               </label>
 
               <label className="flex items-center gap-2">
-                <span>Agent Event</span>
+                <span>{copy.labels.agentEventFilterLabel}</span>
                 <select
                   value={agentEventType}
                   onChange={(e) => setAgentEventType(e.target.value)}
                   disabled={eventType !== 'agent_event'}
-                  className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-200 disabled:opacity-50"
+                  className="inline-select disabled:opacity-50"
                 >
                   <option value="">All</option>
                   <option value="thinking">Thinking</option>
@@ -197,7 +200,7 @@ export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
             {isLoadingEvents && events.length === 0 && (
               <div className="flex items-center justify-center py-8 text-slate-500">
                 <RefreshCcw className="w-4 h-4 mr-2 animate-spin" />
-                加载事件...
+                {copy.labels.loadingEvents}
               </div>
             )}
 
@@ -209,12 +212,12 @@ export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
 
             {!isLoadingEvents && events.length === 0 && !eventsError && (
               <div className="text-center py-6 text-slate-500">
-                暂无事件
+                {copy.labels.noEvents}
               </div>
             )}
 
             {events.length > 0 && (
-              <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-3">
+              <div className="run-list-item bg-slate-950/60">
                 <ExecutionEventList events={events} />
               </div>
             )}
@@ -225,7 +228,7 @@ export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
                 onClick={() => void loadMore()}
                 className="w-full text-center text-xs text-indigo-400 hover:text-indigo-300 transition-colors py-2"
               >
-                加载更多
+                {copy.labels.loadMore}
               </button>
             )}
           </>

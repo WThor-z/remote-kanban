@@ -11,6 +11,7 @@ import type { CreateTaskRequest } from '../../hooks/useTaskApi';
 import type { AgentType } from '@opencode-vibe/protocol';
 import { useModels } from '../../hooks/useModels';
 import { useProjects } from '../../hooks/useProjects';
+import { getConsoleLexiconSection } from '../../lexicon/consoleLexicon';
 
 interface CreateTaskModalProps {
   isOpen: boolean;
@@ -36,6 +37,7 @@ export function CreateTaskModal({
   isLoading = false,
   error,
 }: CreateTaskModalProps) {
+  const copy = getConsoleLexiconSection('createTaskModal');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [agentType, setAgentType] = useState<AgentType>('opencode');
@@ -105,16 +107,16 @@ export function CreateTaskModal({
 
   const validateForm = useCallback((): boolean => {
     if (!title.trim()) {
-      setLocalError('Title is required');
+      setLocalError(copy.errors.titleRequired);
       return false;
     }
     if (!projectId) {
-      setLocalError('Project is required');
+      setLocalError(copy.errors.projectRequired);
       return false;
     }
     setLocalError(null);
     return true;
-  }, [title, projectId]);
+  }, [copy.errors.projectRequired, copy.errors.titleRequired, title, projectId]);
 
   const handleCreate = async () => {
     if (!validateForm()) return;
@@ -165,88 +167,86 @@ export function CreateTaskModal({
   if (!isOpen) return null;
 
   return (
-    <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-      onClick={handleBackdropClick}
-    >
-      <div className="bg-slate-800 rounded-xl shadow-2xl border border-slate-700 w-full max-w-lg">
+    <div className="modal-overlay z-50" onClick={handleBackdropClick}>
+      <div className="modal-overlay-inner">
+        <div className="modal-shell modal-shell--create w-full" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-slate-700">
-          <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-            <Plus size={20} className="text-indigo-400" />
-            Create New Task
+          <div className="modal-header flex items-center justify-between">
+            <h2 className="modal-title">
+              <Plus size={18} className="text-cyan-300" />
+              {copy.title}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="p-2 text-slate-400 hover:text-white transition-colors rounded-lg hover:bg-slate-700"
+              className="tech-btn tech-btn-secondary px-2.5 py-1.5"
             aria-label="Close"
           >
-            <X size={20} />
+              <X size={16} />
           </button>
-        </div>
+          </div>
 
         {/* Form */}
-        <div className="p-4 space-y-4">
+          <div className="modal-body modal-body--scroll">
           {/* Error Display */}
           {displayError && (
-            <div className="flex items-center gap-2 p-3 bg-rose-500/10 border border-rose-500/20 rounded-lg text-rose-400 text-sm">
+              <div className="alert-error flex items-center gap-2">
               <AlertCircle size={16} />
               {displayError}
             </div>
           )}
 
           {/* Title */}
-          <div>
-            <label htmlFor="task-title" className="block text-sm font-medium text-slate-300 mb-1.5">
-              Title <span className="text-rose-400">*</span>
+            <div className="field">
+              <label htmlFor="task-title" className="field-label">
+                {copy.fields.title} <span className="text-rose-400">*</span>
             </label>
             <input
               id="task-title"
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="Enter task title..."
-              className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2.5 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              placeholder={copy.placeholders.title}
+                className="glass-input"
               autoFocus
               disabled={isLoading}
             />
           </div>
 
           {/* Description */}
-          <div>
-            <label htmlFor="task-description" className="block text-sm font-medium text-slate-300 mb-1.5">
-              Description <span className="text-slate-500">(optional)</span>
+            <div className="field">
+              <label htmlFor="task-description" className="field-label">
+                {copy.fields.description} <span className="field-hint">(optional)</span>
             </label>
             <textarea
               id="task-description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Describe the task in detail..."
+              placeholder={copy.placeholders.description}
               rows={4}
-              className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2.5 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none"
+                className="glass-textarea"
               disabled={isLoading}
             />
           </div>
 
           {/* Agent Type */}
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1.5">
+            <div className="field">
+              <label className="field-label">
               <Bot size={14} className="inline mr-1.5" />
-              Agent
+                {copy.fields.agent}
             </label>
-            <div className="relative">
+              <div className="dropdown-wrap">
               <button
                 type="button"
                 onClick={() => setIsAgentOpen(!isAgentOpen)}
-                className="w-full flex items-center justify-between bg-slate-700 border border-slate-600 rounded-lg px-3 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="glass-select flex items-center justify-between"
                 disabled={isLoading}
               >
-                <span className="text-indigo-400">{agentOptions.find(a => a.value === agentType)?.label}</span>
-                <ChevronDown size={16} className={`text-slate-400 transition-transform ${isAgentOpen ? 'rotate-180' : ''}`} />
+                  <span className="text-cyan-200">{agentOptions.find(a => a.value === agentType)?.label}</span>
+                  <ChevronDown size={16} className={`text-slate-400 transition-transform ${isAgentOpen ? 'rotate-180' : ''}`} />
               </button>
               {isAgentOpen && (
-                <div className="absolute top-full left-0 right-0 mt-1 bg-slate-700 border border-slate-600 rounded-lg shadow-xl z-10 overflow-hidden">
+                  <div className="dropdown-panel">
                   {agentOptions.map((option) => (
                     <button
                       key={option.value}
@@ -255,12 +255,10 @@ export function CreateTaskModal({
                         setAgentType(option.value);
                         setIsAgentOpen(false);
                       }}
-                      className={`w-full px-3 py-2.5 text-left hover:bg-slate-600 transition-colors ${
-                        agentType === option.value ? 'bg-slate-600' : ''
-                      }`}
+                        className={`dropdown-item ${agentType === option.value ? 'dropdown-item--active' : ''}`}
                     >
-                      <div className="text-indigo-400">{option.label}</div>
-                      <div className="text-xs text-slate-400">{option.description}</div>
+                        <div className="text-cyan-200">{option.label}</div>
+                        <div className="dropdown-note">{option.description}</div>
                     </button>
                   ))}
                 </div>
@@ -269,43 +267,43 @@ export function CreateTaskModal({
           </div>
 
           {/* Base Branch */}
-          <div>
-            <label htmlFor="task-branch" className="block text-sm font-medium text-slate-300 mb-1.5">
+            <div className="field">
+              <label htmlFor="task-branch" className="field-label">
               <GitBranch size={14} className="inline mr-1.5" />
-              Base Branch
+                {copy.fields.branch}
             </label>
             <input
               id="task-branch"
               type="text"
               value={baseBranch}
               onChange={(e) => setBaseBranch(e.target.value)}
-              placeholder="main"
-              className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2.5 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              placeholder={copy.placeholders.branch}
+                className="glass-input"
               disabled={isLoading}
             />
           </div>
 
           {/* Project */}
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1.5">
+            <div className="field">
+              <label className="field-label">
               <FolderGit2 size={14} className="inline mr-1.5" />
-              Project <span className="text-rose-400">*</span>
+                {copy.fields.project} <span className="text-rose-400">*</span>
               {projectsLoading && <span className="text-slate-500 ml-2">(loading...)</span>}
             </label>
-            <div className="relative">
+              <div className="dropdown-wrap">
               <button
                 type="button"
                 onClick={() => setIsProjectOpen(!isProjectOpen)}
-                className="w-full flex items-center justify-between bg-slate-700 border border-slate-600 rounded-lg px-3 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="glass-select flex items-center justify-between"
                 disabled={isLoading}
               >
-                <span className={selectedProject ? 'text-emerald-400' : 'text-slate-400'}>
-                  {selectedProject ? selectedProject.name : (hasProjects ? 'Select a project' : 'No projects available')}
+                <span className={selectedProject ? 'text-emerald-300' : 'text-slate-400'}>
+                  {selectedProject ? selectedProject.name : (hasProjects ? copy.placeholders.project : copy.errors.noProjectsAvailable)}
                 </span>
                 <ChevronDown size={16} className={`text-slate-400 transition-transform ${isProjectOpen ? 'rotate-180' : ''}`} />
               </button>
               {isProjectOpen && (
-                <div className="absolute top-full left-0 right-0 mt-1 bg-slate-700 border border-slate-600 rounded-lg shadow-xl z-10 overflow-hidden max-h-48 overflow-y-auto">
+                  <div className="dropdown-panel dropdown-panel--scroll">
                   {projects.length > 0 ? (
                     projects.map((project) => (
                       <button
@@ -315,19 +313,17 @@ export function CreateTaskModal({
                           setProjectId(project.id);
                           setIsProjectOpen(false);
                         }}
-                        className={`w-full px-3 py-2.5 text-left hover:bg-slate-600 transition-colors ${
-                          projectId === project.id ? 'bg-slate-600' : ''
-                        }`}
+                          className={`dropdown-item ${projectId === project.id ? 'dropdown-item--active' : ''}`}
                       >
-                        <div className="text-emerald-400">{project.name}</div>
-                        <div className="text-xs text-slate-400 mt-0.5">
+                          <div className="text-emerald-300">{project.name}</div>
+                          <div className="dropdown-note mt-0.5">
                           {project.localPath} | gateway: {project.gatewayId}
                         </div>
                       </button>
                     ))
                   ) : (
                     <div className="px-3 py-2.5 text-slate-500 text-sm">
-                      No projects registered yet
+                      {copy.errors.noProjects}
                     </div>
                   )}
                 </div>
@@ -337,44 +333,44 @@ export function CreateTaskModal({
 
           {/* Model Selector - available after project selection */}
           {selectedProject && (
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">
+              <div className="field">
+                <label className="field-label">
                 <Cpu size={14} className="inline mr-1.5" />
-                Model
+                  {copy.fields.model}
                 {modelsLoading && <span className="text-slate-500 ml-2">(loading...)</span>}
               </label>
-              <div className="relative">
+                <div className="dropdown-wrap">
                 <button
                   type="button"
                   onClick={() => setIsModelOpen(!isModelOpen)}
-                  className="w-full flex items-center justify-between bg-slate-700 border border-slate-600 rounded-lg px-3 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="glass-select flex items-center justify-between"
                   disabled={isLoading || modelsLoading}
                 >
-                  <span className={model ? 'text-cyan-400' : 'text-slate-400'}>
+                    <span className={model ? 'text-cyan-200' : 'text-slate-400'}>
                     {model 
                       ? (modelOptions.find(m => m.value === model)?.label || model)
-                      : 'Default (auto-select)'}
+                      : copy.placeholders.modelDefault}
                   </span>
                   <ChevronDown size={16} className={`text-slate-400 transition-transform ${isModelOpen ? 'rotate-180' : ''}`} />
                 </button>
                 {isModelOpen && (
-                  <div className="absolute top-full left-0 right-0 mt-1 bg-slate-700 border border-slate-600 rounded-lg shadow-xl z-10 overflow-hidden">
+                    <div className="dropdown-panel">
                     {/* Search input */}
-                    <div className="p-2 border-b border-slate-600">
+                      <div className="p-2 border-b border-slate-700">
                       <div className="relative">
                         <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
                         <input
                           type="text"
                           value={modelSearch}
                           onChange={(e) => setModelSearch(e.target.value)}
-                          placeholder="Search models..."
-                          className="w-full bg-slate-600 border border-slate-500 rounded px-3 py-1.5 pl-8 text-sm text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                          placeholder={copy.placeholders.modelSearch}
+                            className="glass-input pl-8 text-sm"
                           autoFocus
                         />
                       </div>
                     </div>
                     
-                    <div className="max-h-48 overflow-y-auto">
+                      <div className="dropdown-panel--scroll">
                       {/* Default option - only show when not searching */}
                       {!modelSearch.trim() && (
                         <button
@@ -384,12 +380,10 @@ export function CreateTaskModal({
                             setIsModelOpen(false);
                             setModelSearch('');
                           }}
-                          className={`w-full px-3 py-2.5 text-left hover:bg-slate-600 transition-colors ${
-                            !model ? 'bg-slate-600' : ''
-                          }`}
+                            className={`dropdown-item ${!model ? 'dropdown-item--active' : ''}`}
                         >
-                          <div className="text-slate-400">Default (auto-select)</div>
-                          <div className="text-xs text-slate-500">Use the model configured on the gateway</div>
+                            <div className="text-slate-200">{copy.placeholders.modelDefault}</div>
+                            <div className="dropdown-note">{copy.placeholders.modelDefaultHint}</div>
                         </button>
                       )}
                       
@@ -404,18 +398,16 @@ export function CreateTaskModal({
                               setIsModelOpen(false);
                               setModelSearch('');
                             }}
-                            className={`w-full px-3 py-2.5 text-left hover:bg-slate-600 transition-colors ${
-                              model === option.value ? 'bg-slate-600' : ''
-                            }`}
+                              className={`dropdown-item ${model === option.value ? 'dropdown-item--active' : ''}`}
                           >
-                            <div className="text-cyan-400">{option.model.name}</div>
-                            <div className="text-xs text-slate-400">{option.provider} - {option.value}</div>
+                              <div className="text-cyan-200">{option.model.name}</div>
+                              <div className="dropdown-note">{option.provider} - {option.value}</div>
                           </button>
                         ))
                       ) : (
                         !modelsLoading && (
-                          <div className="px-3 py-2.5 text-slate-500 text-sm">
-                            {modelSearch.trim() ? 'No matching models' : 'No models available from this host'}
+                            <div className="px-3 py-2.5 text-slate-500 text-sm">
+                            {modelSearch.trim() ? copy.errors.noModelMatch : copy.errors.noModelFromHost}
                           </div>
                         )
                       )}
@@ -428,28 +420,28 @@ export function CreateTaskModal({
         </div>
 
         {/* Footer Actions */}
-        <div className="flex items-center justify-end gap-3 p-4 border-t border-slate-700">
+          <div className="modal-footer">
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 text-slate-300 hover:text-white transition-colors"
+              className="tech-btn tech-btn-secondary"
             disabled={isLoading}
           >
-            Cancel
+            {copy.actions.cancel}
           </button>
 
           <button
             type="button"
             onClick={handleCreate}
             disabled={isLoading || !title.trim() || !projectId}
-            className="flex items-center gap-2 px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="tech-btn tech-btn-secondary"
           >
             {isLoading ? (
               <Loader2 size={16} className="animate-spin" />
             ) : (
               <Plus size={16} />
             )}
-            Create
+            {copy.actions.create}
           </button>
 
           {onCreateAndStart && (
@@ -457,16 +449,17 @@ export function CreateTaskModal({
               type="button"
               onClick={handleCreateAndStart}
               disabled={isLoading || !title.trim() || !projectId}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="tech-btn tech-btn-primary"
             >
               {isLoading ? (
                 <Loader2 size={16} className="animate-spin" />
               ) : (
                 <Play size={16} />
               )}
-              Create & Start
+              {copy.actions.dispatch}
             </button>
           )}
+          </div>
         </div>
       </div>
     </div>

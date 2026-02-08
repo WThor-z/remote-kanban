@@ -48,4 +48,22 @@ describe('TaskCard', () => {
     rerender(<TaskCard task={{ ...mockTask, status: 'done' }} />);
     expect(screen.getByTestId('task-card')).toHaveClass('border-l-emerald-400');
   });
+
+  it('渲染科技感状态胶囊', () => {
+    render(<TaskCard task={mockTask} />);
+
+    const badge = screen.getByTestId('task-status');
+    expect(badge).toHaveTextContent('todo');
+    expect(badge).toHaveClass('task-card__status--todo');
+  });
+
+  it('状态切换到 doing/done 时触发执行流动效类名', () => {
+    const { rerender } = render(<TaskCard task={mockTask} />);
+
+    rerender(<TaskCard task={{ ...mockTask, status: 'doing' }} />);
+    expect(screen.getByTestId('task-card')).toHaveClass('task-card--flow-doing');
+
+    rerender(<TaskCard task={{ ...mockTask, status: 'done' }} />);
+    expect(screen.getByTestId('task-card')).toHaveClass('task-card--flow-done');
+  });
 });

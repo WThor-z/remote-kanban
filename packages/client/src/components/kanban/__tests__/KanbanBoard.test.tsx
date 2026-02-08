@@ -45,6 +45,7 @@ describe('KanbanBoard', () => {
     expect(screen.getByText('To Do')).toBeInTheDocument();
     expect(screen.getByText('Doing')).toBeInTheDocument();
     expect(screen.getByText('Done')).toBeInTheDocument();
+    expect(screen.getByTestId('kanban-grid')).toHaveClass('kanban-grid');
   });
 
   it('在对应列中渲染任务', () => {
