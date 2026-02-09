@@ -16,6 +16,7 @@ export type TaskPriority = 'low' | 'medium' | 'high';
 export interface Task {
   id: string;
   projectId: string | null;
+  workspaceId: string | null;
   title: string;
   description: string | null;
   status: TaskStatus;
@@ -45,6 +46,11 @@ export interface UpdateTaskRequest {
   priority?: TaskPriority;
 }
 
+export interface FetchTasksOptions {
+  projectId?: string;
+  workspaceId?: string;
+}
+
 // API base URL - defaults to Rust backend REST API (port 8081)
 const getApiBaseUrl = (): string => resolveApiBaseUrl();
 
@@ -52,7 +58,7 @@ export interface UseTaskApiResult {
   tasks: Task[];
   isLoading: boolean;
   error: string | null;
-  fetchTasks: () => Promise<void>;
+  fetchTasks: (filters?: FetchTasksOptions) => Promise<void>;
   createTask: (data: CreateTaskRequest) => Promise<Task | null>;
   getTask: (id: string) => Promise<Task | null>;
   updateTask: (id: string, data: UpdateTaskRequest) => Promise<Task | null>;
@@ -71,11 +77,19 @@ export function useTaskApi(): UseTaskApiResult {
     setError(null);
   }, []);
 
-  const fetchTasks = useCallback(async () => {
+  const fetchTasks = useCallback(async (filters?: FetchTasksOptions) => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${baseUrl}/api/tasks`);
+      const params = new URLSearchParams();
+      if (filters?.projectId) {
+        params.set('projectId', filters.projectId);
+      }
+      if (filters?.workspaceId) {
+        params.set('workspaceId', filters.workspaceId);
+      }
+      const query = params.toString();
+      const response = await fetch(`${baseUrl}/api/tasks${query ? `?${query}` : ''}`);
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to fetch tasks');

@@ -86,6 +86,15 @@ pub struct RunSummaryResponse {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ListTasksQuery {
+    #[serde(default)]
+    pub project_id: Option<Uuid>,
+    #[serde(default)]
+    pub workspace_id: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RunEventsQuery {
     #[serde(default)]
     pub offset: Option<usize>,
@@ -161,6 +170,7 @@ pub struct ErrorResponse {
 /// GET /api/tasks - List all tasks
 async fn list_tasks(
     State(state): State<AppState>,
+    Query(query): Query<ListTasksQuery>,
 ) -> Result<Json<Vec<TaskResponse>>, (StatusCode, Json<ErrorResponse>)> {
     let tasks = state.task_store().list().await.map_err(|e| {
         (
@@ -171,7 +181,21 @@ async fn list_tasks(
         )
     })?;
 
-    Ok(Json(tasks.into_iter().map(TaskResponse::from).collect()))
+    Ok(Json(
+        tasks
+            .into_iter()
+            .filter(|task| {
+                let project_ok = query
+                    .project_id
+                    .is_none_or(|project_id| task.project_id == Some(project_id));
+                let workspace_ok = query
+                    .workspace_id
+                    .is_none_or(|workspace_id| task.workspace_id == Some(workspace_id));
+                project_ok && workspace_ok
+            })
+            .map(TaskResponse::from)
+            .collect(),
+    ))
 }
 
 /// POST /api/tasks - Create a new task
@@ -669,6 +693,7 @@ mod tests {
     use vk_core::kanban::KanbanStore;
     use vk_core::project::CreateProjectRequest;
     use vk_core::task::FileTaskStore;
+    use vk_core::workspace::CreateWorkspaceRequest;
 
     use crate::gateway::GatewayManager;
 
@@ -698,6 +723,129 @@ mod tests {
         .unwrap();
 
         (state, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn list_tasks_supports_project_and_workspace_filters() {
+        let (state, _temp_dir) = build_state().await;
+        let workspace_1 = state.workspace_store().list().await[0].id;
+        let workspace_2 = state
+            .workspace_store()
+            .create(CreateWorkspaceRequest {
+                name: "Workspace Two".to_string(),
+                slug: Some("workspace-two".to_string()),
+                root_path: "/tmp/workspace-two".to_string(),
+                default_project_id: None,
+            })
+            .await
+            .unwrap()
+            .id;
+
+        let project_1 = state
+            .project_store()
+            .register(
+                Uuid::new_v4(),
+                CreateProjectRequest {
+                    name: "project-one".to_string(),
+                    local_path: "/tmp/project-one".to_string(),
+                    remote_url: None,
+                    default_branch: None,
+                    worktree_dir: None,
+                    workspace_id: workspace_1,
+                },
+            )
+            .await
+            .unwrap();
+
+        let project_2 = state
+            .project_store()
+            .register(
+                Uuid::new_v4(),
+                CreateProjectRequest {
+                    name: "project-two".to_string(),
+                    local_path: "/tmp/project-two".to_string(),
+                    remote_url: None,
+                    default_branch: None,
+                    worktree_dir: None,
+                    workspace_id: workspace_2,
+                },
+            )
+            .await
+            .unwrap();
+
+        let task_1 = state
+            .task_store()
+            .create(Task::new("Task one".to_string()).with_project_binding(project_1.id, workspace_1))
+            .await
+            .unwrap();
+        let task_2 = state
+            .task_store()
+            .create(Task::new("Task two".to_string()).with_project_binding(project_2.id, workspace_2))
+            .await
+            .unwrap();
+        state
+            .task_store()
+            .create(Task::new("Unbound task".to_string()))
+            .await
+            .unwrap();
+
+        let app = router().with_state(state.clone());
+
+        let by_project = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/tasks?projectId={}", project_1.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(by_project.status(), StatusCode::OK);
+        let by_project_body = to_bytes(by_project.into_body(), usize::MAX).await.unwrap();
+        let by_project_payload: Value = serde_json::from_slice(&by_project_body).unwrap();
+        let by_project_items = by_project_payload.as_array().unwrap();
+        assert_eq!(by_project_items.len(), 1);
+        assert_eq!(by_project_items[0]["id"], task_1.id.to_string());
+
+        let by_workspace = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/tasks?workspaceId={}", workspace_2))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(by_workspace.status(), StatusCode::OK);
+        let by_workspace_body = to_bytes(by_workspace.into_body(), usize::MAX).await.unwrap();
+        let by_workspace_payload: Value = serde_json::from_slice(&by_workspace_body).unwrap();
+        let by_workspace_items = by_workspace_payload.as_array().unwrap();
+        assert_eq!(by_workspace_items.len(), 1);
+        assert_eq!(by_workspace_items[0]["id"], task_2.id.to_string());
+
+        let by_both = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/api/tasks?projectId={}&workspaceId={}",
+                        project_1.id, workspace_1
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(by_both.status(), StatusCode::OK);
+        let by_both_body = to_bytes(by_both.into_body(), usize::MAX).await.unwrap();
+        let by_both_payload: Value = serde_json::from_slice(&by_both_body).unwrap();
+        let by_both_items = by_both_payload.as_array().unwrap();
+        assert_eq!(by_both_items.len(), 1);
+        assert_eq!(by_both_items[0]["id"], task_1.id.to_string());
     }
 
     #[tokio::test]
