@@ -35,6 +35,7 @@
 | 功能 | 摘要 | 状态 | 负责人 | 更新日期 | 文档 |
 |------|------|------|--------|----------|------|
 | service/agent-gateway | 远程执行网关，负责接收任务并回传执行事件 | 活跃 | 待定 | 2026-02-06 | [文档](service-agent-gateway.md) |
+| service/agent-memory | Agent Memory 注入、抽取、双存储与管理 API | 活跃 | 待定 | 2026-02-09 | [文档](service-agent-memory.md) |
 
 ## 开发工具与治理
 

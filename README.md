@@ -361,3 +361,34 @@ MIT
 - [OpenCode](https://opencode.ai) - AI 编程助手
 - [dnd-kit](https://dndkit.com) - 拖拽库
 - [Socket.IO](https://socket.io) - 实时通信
+
+## Agent Memory
+
+项目已集成 Agent Memory 模块（以 Gateway 为主链路）：
+
+- Gateway 会在任务执行前注入相关记忆上下文。
+- Gateway 会在任务执行后抽取并沉淀可复用记忆（规则优先，LLM 兜底）。
+- 记忆按 `hostId` 和可选 `projectId` 隔离。
+- 存储模式支持本地、中央、双写和全关。
+- 前端提供独立 `Memory` 页面，用于设置、检索、CRUD 与开关控制。
+
+### Memory REST API
+
+- `GET /api/memory/settings`
+- `PATCH /api/memory/settings`
+- `GET /api/memory/items`
+- `POST /api/memory/items`
+- `PATCH /api/memory/items/{id}`
+- `DELETE /api/memory/items/{id}`
+
+### Gateway 环境变量
+
+- `MEMORY_ENABLE`
+- `MEMORY_GATEWAY_STORE_ENABLE`
+- `MEMORY_RUST_STORE_ENABLE`
+- `MEMORY_AUTO_WRITE_ENABLE`
+- `MEMORY_PROMPT_INJECTION_ENABLE`
+- `MEMORY_INJECTION_TOKEN_BUDGET`
+- `MEMORY_RETRIEVAL_TOP_K`
+- `MEMORY_LLM_EXTRACT_ENABLE`
+- `MEMORY_DATA_DIR`
