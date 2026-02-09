@@ -4,9 +4,21 @@ import { useKanban } from './hooks/useKanban';
 import { useTaskSession } from './hooks/useTaskSession';
 import { useTaskApi, type CreateTaskRequest } from './hooks/useTaskApi';
 import { useTaskExecutor } from './hooks/useTaskExecutor';
-import { Bot, Plus, Server, HardDrive, Plug, RefreshCw, Layers, ChevronDown } from 'lucide-react';
+import {
+  Bot,
+  Plus,
+  Server,
+  HardDrive,
+  Plug,
+  RefreshCw,
+  Layers,
+  ChevronDown,
+  LayoutGrid,
+  Database,
+} from 'lucide-react';
 import { KanbanBoard } from './components/kanban/KanbanBoard';
 import { TaskDetailPanel, CreateTaskModal } from './components/task';
+import { MemoryPage } from './components/memory/MemoryPage';
 import type { KanbanTask, AgentType } from '@opencode-vibe/protocol';
 import { useGatewayInfo } from './hooks/useGatewayInfo';
 import { useWorkspaces } from './hooks/useWorkspaces';
@@ -32,6 +44,7 @@ function App() {
   const [selectedTask, setSelectedTask] = useState<KanbanTask | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [skin, setSkin] = useState<'neural' | 'lab'>(readStoredSkin);
+  const [view, setView] = useState<'board' | 'memory'>('board');
   const [activeWorkspaceId, setActiveWorkspaceId] = useState(readStoredWorkspaceScope);
   const [isWorkspaceScopeOpen, setIsWorkspaceScopeOpen] = useState(false);
   const sharedCopy = getConsoleLexiconSection('shared');
@@ -348,6 +361,20 @@ function App() {
             </div>
             <button
               type="button"
+              onClick={() => setView('board')}
+              className="tech-btn tech-btn-secondary"
+            >
+              <LayoutGrid size={14} /> Board
+            </button>
+            <button
+              type="button"
+              onClick={() => setView('memory')}
+              className="tech-btn tech-btn-secondary"
+            >
+              <Database size={14} /> Memory
+            </button>
+            <button
+              type="button"
               onClick={() => setIsCreateModalOpen(true)}
               className="tech-btn tech-btn-primary"
               title="Create new task (Press 'c')"
@@ -410,24 +437,28 @@ function App() {
           {gatewayInfoError && <div className="gateway-error">{gatewayInfoError}</div>}
         </section>
 
-        <section className="tech-panel board-panel reveal reveal-2">
-          <div className="section-bar">
-              <h2 className="section-title">{appCopy.sections.boardTitle}</h2>
-              <p className="section-note">
-              {Object.keys(filteredBoard.tasks).length} {appCopy.sections.boardCounterSuffix}
-              </p>
-            </div>
+        {view === 'board' ? (
+          <section className="tech-panel board-panel reveal reveal-2">
+            <div className="section-bar">
+                <h2 className="section-title">{appCopy.sections.boardTitle}</h2>
+                <p className="section-note">
+                {Object.keys(filteredBoard.tasks).length} {appCopy.sections.boardCounterSuffix}
+                </p>
+              </div>
 
-          <KanbanBoard
-            board={filteredBoard}
-            onMoveTask={moveTask}
-            onDeleteTask={deleteTask}
-            onTaskClick={handleTaskClick}
-            executingTaskIds={executingTaskIds}
-          />
-        </section>
+            <KanbanBoard
+              board={filteredBoard}
+              onMoveTask={moveTask}
+              onDeleteTask={deleteTask}
+              onTaskClick={handleTaskClick}
+              executingTaskIds={executingTaskIds}
+            />
+          </section>
+        ) : (
+          <MemoryPage />
+        )}
 
-      {selectedTask && (
+      {view === 'board' && selectedTask && (
         <TaskDetailPanel
           task={selectedTask}
           history={history}

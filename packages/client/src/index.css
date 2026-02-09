@@ -862,6 +862,146 @@ pre {
   gap: 0.45rem;
 }
 
+.memory-panel {
+  padding: clamp(0.9rem, 1.8vw, 1.4rem);
+}
+
+.memory-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 0.72rem;
+}
+
+.memory-actions {
+  display: inline-flex;
+  gap: 0.5rem;
+}
+
+.memory-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.memory-filter-grid__search {
+  grid-column: span 2;
+}
+
+.memory-pager {
+  margin-top: 0.65rem;
+  display: flex;
+  align-items: center;
+  gap: 0.62rem;
+}
+
+.memory-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.58rem;
+}
+
+.memory-card {
+  border-radius: 0.78rem;
+  border: 1px solid rgba(104, 147, 181, 0.28);
+  background: rgba(8, 20, 32, 0.82);
+  padding: 0.7rem;
+}
+
+.memory-card__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.memory-card__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.36rem;
+}
+
+.memory-card__tools {
+  display: inline-flex;
+  gap: 0.3rem;
+}
+
+.memory-card__content {
+  margin: 0.55rem 0 0;
+  line-height: 1.48;
+  color: #d9efff;
+}
+
+.memory-card__meta {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.52rem;
+  font-size: 0.74rem;
+  color: #8fadc8;
+  font-family: var(--font-mono);
+}
+
+.memory-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.memory-settings__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.memory-settings__numbers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.62rem;
+}
+
+.memory-settings__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.memory-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  border: 1px solid rgba(102, 145, 180, 0.3);
+  border-radius: 0.6rem;
+  padding: 0.38rem 0.5rem;
+  background: rgba(6, 17, 28, 0.72);
+  font-size: 0.76rem;
+  color: #b6d1ea;
+}
+
+.memory-toggle input {
+  margin: 0;
+}
+
+.memory-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.memory-editor__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.62rem;
+}
+
+.memory-editor__flags {
+  display: flex;
+  gap: 0.55rem;
+}
+
+.memory-editor__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.55rem;
+}
+
 .console-root--lab {
   --bg-base: #ecf3fa;
   --bg-ink: #dee9f4;
@@ -962,6 +1102,8 @@ pre {
 .console-root--lab .column-count-badge,
 .console-root--lab .task-card__status,
 .console-root--lab .run-list-item,
+.console-root--lab .memory-card,
+.console-root--lab .memory-toggle,
 .console-root--lab .inline-select,
 .console-root--lab .glass-input,
 .console-root--lab .glass-textarea,
@@ -1103,6 +1245,15 @@ pre {
   .kanban-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .memory-filter-grid,
+  .memory-settings__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .memory-filter-grid__search {
+    grid-column: span 2;
+  }
 }
 
 @media (max-width: 880px) {
@@ -1113,6 +1264,17 @@ pre {
   .gateway-grid,
   .kanban-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .memory-filter-grid,
+  .memory-settings__grid,
+  .memory-settings__numbers,
+  .memory-editor__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .memory-filter-grid__search {
+    grid-column: auto;
   }
 
   .tech-title {
