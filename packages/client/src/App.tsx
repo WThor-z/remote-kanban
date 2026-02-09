@@ -4,13 +4,15 @@ import { useKanban } from './hooks/useKanban';
 import { useTaskSession } from './hooks/useTaskSession';
 import { useTaskApi, type CreateTaskRequest } from './hooks/useTaskApi';
 import { useTaskExecutor } from './hooks/useTaskExecutor';
-import { Bot, Plus, Server, HardDrive, Plug, RefreshCw } from 'lucide-react';
+import { Bot, Plus, Server, HardDrive, Plug, RefreshCw, Layers, ChevronDown } from 'lucide-react';
 import { KanbanBoard } from './components/kanban/KanbanBoard';
 import { TaskDetailPanel, CreateTaskModal } from './components/task';
 import type { KanbanTask, AgentType } from '@opencode-vibe/protocol';
 import { useGatewayInfo } from './hooks/useGatewayInfo';
+import { useWorkspaces } from './hooks/useWorkspaces';
 import { resolveApiBaseUrl, resolveGatewaySocketUrl } from './config/endpoints';
 import { getConsoleLexiconSection } from './lexicon/consoleLexicon';
+import { readStoredWorkspaceScope, storeWorkspaceScope } from './utils/workspaceScopeStorage';
 
 const SKIN_STORAGE_KEY = 'vk-console-skin';
 
@@ -28,8 +30,11 @@ function App() {
   const [selectedTask, setSelectedTask] = useState<KanbanTask | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [skin, setSkin] = useState<'neural' | 'lab'>(readStoredSkin);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState(readStoredWorkspaceScope);
+  const [isWorkspaceScopeOpen, setIsWorkspaceScopeOpen] = useState(false);
   const sharedCopy = getConsoleLexiconSection('shared');
   const appCopy = getConsoleLexiconSection('app');
+  const createTaskModalCopy = getConsoleLexiconSection('createTaskModal');
 
   const gatewaySocketUrl = resolveGatewaySocketUrl();
   const apiBaseUrl = resolveApiBaseUrl();
@@ -39,6 +44,12 @@ function App() {
     error: gatewayInfoError,
     refresh: refreshGatewayInfo,
   } = useGatewayInfo();
+  const {
+    workspaces,
+    isLoading: workspacesLoading,
+    hasWorkspaces,
+  } = useWorkspaces();
+  const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId);
 
   // Rust API hook for task management
   const {
@@ -201,6 +212,16 @@ function App() {
   const isLabSkin = skin === 'lab';
 
   useEffect(() => {
+    if (activeWorkspaceId && !workspaces.some((workspace) => workspace.id === activeWorkspaceId)) {
+      setActiveWorkspaceId('');
+    }
+  }, [activeWorkspaceId, workspaces]);
+
+  useEffect(() => {
+    storeWorkspaceScope(activeWorkspaceId);
+  }, [activeWorkspaceId]);
+
+  useEffect(() => {
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(SKIN_STORAGE_KEY, skin);
     }
@@ -234,6 +255,51 @@ function App() {
           </div>
 
           <div className="command-panel__actions">
+            <div className="dropdown-wrap">
+              <button
+                type="button"
+                className="glass-select flex items-center justify-between"
+                onClick={() => setIsWorkspaceScopeOpen(!isWorkspaceScopeOpen)}
+                disabled={!hasWorkspaces}
+                title={appCopy.actions.workspaceScope}
+              >
+                <span className="flex items-center gap-2 text-slate-200">
+                  <Layers size={14} className="text-cyan-300" />
+                  {activeWorkspace ? activeWorkspace.name : createTaskModalCopy.placeholders.workspaceAny}
+                  {workspacesLoading && <span className="text-xs text-slate-500">(loading...)</span>}
+                </span>
+                <ChevronDown size={14} className={`text-slate-400 transition-transform ${isWorkspaceScopeOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {isWorkspaceScopeOpen && (
+                <div className="dropdown-panel dropdown-panel--scroll">
+                  <button
+                    type="button"
+                    className={`dropdown-item ${!activeWorkspaceId ? 'dropdown-item--active' : ''}`}
+                    onClick={() => {
+                      setActiveWorkspaceId('');
+                      setIsWorkspaceScopeOpen(false);
+                    }}
+                  >
+                    <div className="text-slate-200">{createTaskModalCopy.placeholders.workspaceAny}</div>
+                    <div className="dropdown-note">{createTaskModalCopy.placeholders.workspaceAnyHint}</div>
+                  </button>
+                  {workspaces.map((workspace) => (
+                    <button
+                      key={workspace.id}
+                      type="button"
+                      className={`dropdown-item ${activeWorkspaceId === workspace.id ? 'dropdown-item--active' : ''}`}
+                      onClick={() => {
+                        setActiveWorkspaceId(workspace.id);
+                        setIsWorkspaceScopeOpen(false);
+                      }}
+                    >
+                      <div className="text-cyan-200">{workspace.name}</div>
+                      <div className="dropdown-note">{workspace.rootPath}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <button
               type="button"
               onClick={() => setIsCreateModalOpen(true)}
@@ -344,6 +410,7 @@ function App() {
           onCreateAndStart={handleCreateAndStartTask}
           isLoading={isTaskApiLoading}
           error={taskApiError}
+          defaultWorkspaceId={activeWorkspaceId || undefined}
         />
       </div>
     </div>

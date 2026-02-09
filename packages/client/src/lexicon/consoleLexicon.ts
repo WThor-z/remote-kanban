@@ -26,6 +26,7 @@ export const CONSOLE_LEXICON = {
     actions: {
       createTask: 'New Task Capsule',
       syncTelemetry: 'Sync Telemetry',
+      workspaceScope: 'Workspace Scope',
     },
     sections: {
       gatewayTitle: 'Gateway Diagnostics',

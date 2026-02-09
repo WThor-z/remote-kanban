@@ -21,6 +21,7 @@ interface CreateTaskModalProps {
   onCreateAndStart?: (data: CreateTaskRequest) => Promise<boolean>;
   isLoading?: boolean;
   error?: string | null;
+  defaultWorkspaceId?: string;
 }
 
 const agentOptions: { value: AgentType; label: string; description: string }[] = [
@@ -37,6 +38,7 @@ export function CreateTaskModal({
   onCreateAndStart,
   isLoading = false,
   error,
+  defaultWorkspaceId,
 }: CreateTaskModalProps) {
   const copy = getConsoleLexiconSection('createTaskModal');
   const [title, setTitle] = useState('');
@@ -44,7 +46,7 @@ export function CreateTaskModal({
   const [agentType, setAgentType] = useState<AgentType>('opencode');
   const [isAgentOpen, setIsAgentOpen] = useState(false);
   const [baseBranch, setBaseBranch] = useState('main');
-  const [workspaceId, setWorkspaceId] = useState('');
+  const [workspaceId, setWorkspaceId] = useState(defaultWorkspaceId || '');
   const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
   const [projectId, setProjectId] = useState('');
   const [isProjectOpen, setIsProjectOpen] = useState(false);
@@ -90,7 +92,7 @@ export function CreateTaskModal({
       setDescription('');
       setAgentType('opencode');
       setBaseBranch('main');
-      setWorkspaceId('');
+      setWorkspaceId(defaultWorkspaceId || '');
       setIsWorkspaceOpen(false);
       setProjectId('');
       setIsProjectOpen(false);
@@ -99,7 +101,7 @@ export function CreateTaskModal({
       setModelSearch('');
       setLocalError(null);
     }
-  }, [isOpen]);
+  }, [defaultWorkspaceId, isOpen]);
 
   // Handle keyboard shortcut to close
   useEffect(() => {

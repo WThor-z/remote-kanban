@@ -130,4 +130,19 @@ describe('CreateTaskModal workspace filtering', () => {
       expect(useProjects).toHaveBeenLastCalledWith({ workspaceId: 'ws-2' });
     });
   });
+
+  it('uses default workspace id for initial project filtering', async () => {
+    render(
+      <CreateTaskModal
+        isOpen
+        onClose={onClose}
+        onCreate={onCreate}
+        defaultWorkspaceId="ws-1"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(useProjects).toHaveBeenLastCalledWith({ workspaceId: 'ws-1' });
+    });
+  });
 });
