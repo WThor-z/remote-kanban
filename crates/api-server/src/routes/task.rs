@@ -291,6 +291,7 @@ async fn list_task_runs(
             }),
         ));
     }
+    let task = task.unwrap();
 
     let runs = state.executor().list_runs(id).map_err(|e| {
         (
@@ -302,7 +303,15 @@ async fn list_task_runs(
     })?;
 
     Ok(Json(
-        runs.into_iter().map(RunSummaryResponse::from).collect(),
+        runs
+            .into_iter()
+            .map(|run| {
+                let mut summary = RunSummaryResponse::from(run);
+                summary.project_id = summary.project_id.or(task.project_id);
+                summary.workspace_id = summary.workspace_id.or(task.workspace_id);
+                summary
+            })
+            .collect(),
     ))
 }
 
@@ -710,6 +719,50 @@ mod tests {
         );
         run.metadata.project_id = Some(project_id);
         run.metadata.workspace_id = Some(workspace_id);
+        run.update_status(ExecutionStatus::Completed);
+        state.executor().run_store().save_run(&run).unwrap();
+
+        let app = router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/tasks/{}/runs", task.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        let listed_run = payload.as_array().unwrap().first().unwrap();
+
+        assert_eq!(listed_run["projectId"], project_id.to_string());
+        assert_eq!(listed_run["workspaceId"], workspace_id.to_string());
+    }
+
+    #[tokio::test]
+    async fn list_runs_backfills_legacy_context_from_task_binding() {
+        let (state, _temp_dir) = build_state().await;
+        let project_id = Uuid::new_v4();
+        let workspace_id = Uuid::new_v4();
+        let task = state
+            .task_store()
+            .create(
+                Task::new("Legacy run context".to_string())
+                    .with_project_binding(project_id, workspace_id),
+            )
+            .await
+            .unwrap();
+
+        let mut run = Run::new(
+            task.id,
+            AgentType::OpenCode,
+            "Legacy prompt".to_string(),
+            "main".to_string(),
+        );
         run.update_status(ExecutionStatus::Completed);
         state.executor().run_store().save_run(&run).unwrap();
 
