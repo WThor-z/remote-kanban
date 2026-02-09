@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useOpencode } from './hooks/useOpencode';
 import { useKanban } from './hooks/useKanban';
 import { useTaskSession } from './hooks/useTaskSession';
@@ -13,6 +13,7 @@ import { useWorkspaces } from './hooks/useWorkspaces';
 import { resolveApiBaseUrl, resolveGatewaySocketUrl } from './config/endpoints';
 import { getConsoleLexiconSection } from './lexicon/consoleLexicon';
 import { readStoredWorkspaceScope, storeWorkspaceScope } from './utils/workspaceScopeStorage';
+import { filterBoardByVisibleTaskIds } from './utils/kanbanBoardFilter';
 
 const SKIN_STORAGE_KEY = 'vk-console-skin';
 
@@ -58,6 +59,10 @@ function App() {
     createTask,
     getTask,
     clearError: clearTaskApiError,
+  } = useTaskApi();
+  const {
+    tasks: scopedTasks,
+    fetchTasks: fetchScopedTasks,
   } = useTaskApi();
 
   // Task executor hook for isolated worktree execution
@@ -105,10 +110,13 @@ function App() {
       console.log('[App] Task created successfully via Rust API:', task);
       // Request sync to refresh kanban board with new task from REST API
       requestSync();
+      if (activeWorkspaceId) {
+        await fetchScopedTasks({ workspaceId: activeWorkspaceId });
+      }
       return true;
     }
     return false;
-  }, [createTask, requestSync]);
+  }, [activeWorkspaceId, createTask, fetchScopedTasks, requestSync]);
 
   // Handle task creation and immediate execution
   const handleCreateAndStartTask = useCallback(async (data: CreateTaskRequest): Promise<boolean> => {
@@ -120,6 +128,9 @@ function App() {
       console.log('[App] Task created successfully, starting execution:', task);
       // Request sync to refresh kanban board
       requestSync();
+      if (activeWorkspaceId) {
+        await fetchScopedTasks({ workspaceId: activeWorkspaceId });
+      }
       
       // Start execution with task-configured agent/model settings
       const executeRequest = {
@@ -138,15 +149,28 @@ function App() {
       }
     }
     return false;
-  }, [createTask, requestSync, startExecution, getExecutionStatus]);
+  }, [activeWorkspaceId, createTask, fetchScopedTasks, requestSync, startExecution, getExecutionStatus]);
 
   const handleCloseCreateModal = useCallback(() => {
     setIsCreateModalOpen(false);
     clearTaskApiError();
   }, [clearTaskApiError]);
 
+  const visibleTaskIds = useMemo(() => {
+    if (!activeWorkspaceId) {
+      return null;
+    }
+
+    return new Set(scopedTasks.map((task) => task.id));
+  }, [activeWorkspaceId, scopedTasks]);
+
+  const filteredBoard = useMemo(
+    () => filterBoardByVisibleTaskIds(board, visibleTaskIds),
+    [board, visibleTaskIds],
+  );
+
   // 获取正在执行的任务 ID 列表
-  const executingTaskIds = Object.values(board.tasks)
+  const executingTaskIds = Object.values(filteredBoard.tasks)
     .filter(task => task.status === 'doing')
     .map(task => task.id);
 
@@ -216,6 +240,25 @@ function App() {
       setActiveWorkspaceId('');
     }
   }, [activeWorkspaceId, workspaces]);
+
+  useEffect(() => {
+    if (!activeWorkspaceId) {
+      return;
+    }
+
+    void fetchScopedTasks({ workspaceId: activeWorkspaceId });
+  }, [activeWorkspaceId, fetchScopedTasks]);
+
+  useEffect(() => {
+    if (!selectedTask || !visibleTaskIds) {
+      return;
+    }
+
+    if (!visibleTaskIds.has(selectedTask.id)) {
+      setSelectedTask(null);
+      selectTask(null);
+    }
+  }, [selectTask, selectedTask, visibleTaskIds]);
 
   useEffect(() => {
     storeWorkspaceScope(activeWorkspaceId);
@@ -366,14 +409,14 @@ function App() {
 
         <section className="tech-panel board-panel reveal reveal-2">
           <div className="section-bar">
-            <h2 className="section-title">{appCopy.sections.boardTitle}</h2>
-            <p className="section-note">
-              {Object.keys(board.tasks).length} {appCopy.sections.boardCounterSuffix}
-            </p>
-          </div>
+              <h2 className="section-title">{appCopy.sections.boardTitle}</h2>
+              <p className="section-note">
+              {Object.keys(filteredBoard.tasks).length} {appCopy.sections.boardCounterSuffix}
+              </p>
+            </div>
 
           <KanbanBoard
-            board={board}
+            board={filteredBoard}
             onMoveTask={moveTask}
             onDeleteTask={deleteTask}
             onTaskClick={handleTaskClick}
