@@ -6,11 +6,12 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { X, Plus, Play, Loader2, AlertCircle, ChevronDown, GitBranch, Bot, Cpu, Search, FolderGit2 } from 'lucide-react';
+import { X, Plus, Play, Loader2, AlertCircle, ChevronDown, GitBranch, Bot, Cpu, Search, FolderGit2, Layers } from 'lucide-react';
 import type { CreateTaskRequest } from '../../hooks/useTaskApi';
 import type { AgentType } from '@opencode-vibe/protocol';
 import { useModels } from '../../hooks/useModels';
 import { useProjects } from '../../hooks/useProjects';
+import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { getConsoleLexiconSection } from '../../lexicon/consoleLexicon';
 
 interface CreateTaskModalProps {
@@ -43,6 +44,8 @@ export function CreateTaskModal({
   const [agentType, setAgentType] = useState<AgentType>('opencode');
   const [isAgentOpen, setIsAgentOpen] = useState(false);
   const [baseBranch, setBaseBranch] = useState('main');
+  const [workspaceId, setWorkspaceId] = useState('');
+  const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
   const [projectId, setProjectId] = useState('');
   const [isProjectOpen, setIsProjectOpen] = useState(false);
   const [model, setModel] = useState<string>('');
@@ -50,7 +53,9 @@ export function CreateTaskModal({
   const [modelSearch, setModelSearch] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
 
-  const { projects, isLoading: projectsLoading, hasProjects } = useProjects();
+  const { workspaces, isLoading: workspacesLoading, hasWorkspaces } = useWorkspaces();
+  const selectedWorkspace = workspaces.find(w => w.id === workspaceId);
+  const { projects, isLoading: projectsLoading, hasProjects } = useProjects({ workspaceId: workspaceId || undefined });
   const selectedProject = projects.find(p => p.id === projectId);
 
   // Fetch available models for the selected project's bound gateway host
@@ -85,6 +90,8 @@ export function CreateTaskModal({
       setDescription('');
       setAgentType('opencode');
       setBaseBranch('main');
+      setWorkspaceId('');
+      setIsWorkspaceOpen(false);
       setProjectId('');
       setIsProjectOpen(false);
       setModel('');
@@ -281,6 +288,77 @@ export function CreateTaskModal({
                 className="glass-input"
               disabled={isLoading}
             />
+          </div>
+
+          {/* Workspace */}
+            <div className="field">
+              <label className="field-label">
+              <Layers size={14} className="inline mr-1.5" />
+                {copy.fields.workspace}
+              {workspacesLoading && <span className="text-slate-500 ml-2">(loading...)</span>}
+            </label>
+              <div className="dropdown-wrap">
+              <button
+                type="button"
+                onClick={() => setIsWorkspaceOpen(!isWorkspaceOpen)}
+                  className="glass-select flex items-center justify-between"
+                disabled={isLoading || !hasWorkspaces}
+              >
+                <span className={selectedWorkspace ? 'text-emerald-300' : 'text-slate-400'}>
+                  {selectedWorkspace
+                    ? selectedWorkspace.name
+                    : (hasWorkspaces ? copy.placeholders.workspace : copy.errors.noWorkspacesAvailable)}
+                </span>
+                <ChevronDown size={16} className={`text-slate-400 transition-transform ${isWorkspaceOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {isWorkspaceOpen && (
+                  <div className="dropdown-panel dropdown-panel--scroll">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setWorkspaceId('');
+                        setProjectId('');
+                        setModel('');
+                        setModelSearch('');
+                        setIsWorkspaceOpen(false);
+                        setIsProjectOpen(false);
+                        clearModels();
+                      }}
+                      className={`dropdown-item ${!workspaceId ? 'dropdown-item--active' : ''}`}
+                    >
+                      <div className="text-slate-200">{copy.placeholders.workspaceAny}</div>
+                      <div className="dropdown-note">{copy.placeholders.workspaceAnyHint}</div>
+                    </button>
+                  {workspaces.length > 0 ? (
+                    workspaces.map((workspace) => (
+                      <button
+                        key={workspace.id}
+                        type="button"
+                        onClick={() => {
+                          setWorkspaceId(workspace.id);
+                          setProjectId('');
+                          setModel('');
+                          setModelSearch('');
+                          setIsWorkspaceOpen(false);
+                          setIsProjectOpen(false);
+                          clearModels();
+                        }}
+                          className={`dropdown-item ${workspaceId === workspace.id ? 'dropdown-item--active' : ''}`}
+                      >
+                          <div className="text-emerald-300">{workspace.name}</div>
+                          <div className="dropdown-note mt-0.5">
+                          {workspace.rootPath}
+                        </div>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="px-3 py-2.5 text-slate-500 text-sm">
+                      {copy.errors.noWorkspaces}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Project */}
