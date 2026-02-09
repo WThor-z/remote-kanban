@@ -72,6 +72,8 @@ pub struct TaskResponse {
 pub struct RunSummaryResponse {
     pub id: Uuid,
     pub task_id: Uuid,
+    pub project_id: Option<Uuid>,
+    pub workspace_id: Option<Uuid>,
     pub agent_type: String,
     pub prompt_preview: String,
     pub created_at: String,
@@ -114,6 +116,8 @@ impl From<RunSummary> for RunSummaryResponse {
         Self {
             id: run.id,
             task_id: run.task_id,
+            project_id: run.project_id,
+            workspace_id: run.workspace_id,
             agent_type: run.agent_type.as_str().to_string(),
             prompt_preview: run.prompt_preview,
             created_at: run.created_at.to_rfc3339(),
@@ -685,6 +689,49 @@ mod tests {
         .unwrap();
 
         (state, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn list_runs_includes_project_and_workspace_context() {
+        let (state, _temp_dir) = build_state().await;
+        let task = state
+            .task_store()
+            .create(Task::new("List runs with context".to_string()))
+            .await
+            .unwrap();
+        let project_id = Uuid::new_v4();
+        let workspace_id = Uuid::new_v4();
+
+        let mut run = Run::new(
+            task.id,
+            AgentType::OpenCode,
+            "Test prompt".to_string(),
+            "main".to_string(),
+        );
+        run.metadata.project_id = Some(project_id);
+        run.metadata.workspace_id = Some(workspace_id);
+        run.update_status(ExecutionStatus::Completed);
+        state.executor().run_store().save_run(&run).unwrap();
+
+        let app = router().with_state(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/tasks/{}/runs", task.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        let listed_run = payload.as_array().unwrap().first().unwrap();
+
+        assert_eq!(listed_run["projectId"], project_id.to_string());
+        assert_eq!(listed_run["workspaceId"], workspace_id.to_string());
     }
 
     #[tokio::test]

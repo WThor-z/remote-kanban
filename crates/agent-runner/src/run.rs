@@ -350,6 +350,12 @@ pub struct RunSummary {
 
     /// Event count
     pub event_count: u32,
+
+    /// Bound project context for this run
+    pub project_id: Option<Uuid>,
+
+    /// Bound workspace context for this run
+    pub workspace_id: Option<Uuid>,
 }
 
 impl From<&Run> for RunSummary {
@@ -371,6 +377,8 @@ impl From<&Run> for RunSummary {
             duration_ms: run.duration_ms,
             status: run.status,
             event_count: run.event_count,
+            project_id: run.metadata.project_id,
+            workspace_id: run.metadata.workspace_id,
         }
     }
 }
@@ -436,15 +444,21 @@ mod tests {
 
     #[test]
     fn test_run_summary() {
-        let run = Run::new(
+        let mut run = Run::new(
             Uuid::new_v4(),
             AgentType::OpenCode,
             "A very long prompt that should be truncated when converted to summary for display in lists".to_string(),
             "main".to_string(),
         );
+        let project_id = Uuid::new_v4();
+        let workspace_id = Uuid::new_v4();
+        run.metadata.project_id = Some(project_id);
+        run.metadata.workspace_id = Some(workspace_id);
 
         let summary = RunSummary::from(&run);
         assert!(summary.prompt_preview.len() <= 103); // 100 + "..."
+        assert_eq!(summary.project_id, Some(project_id));
+        assert_eq!(summary.workspace_id, Some(workspace_id));
     }
 
     #[test]

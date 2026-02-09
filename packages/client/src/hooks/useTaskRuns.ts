@@ -15,6 +15,8 @@ export type RunStatus =
 export interface RunSummary {
   id: string;
   taskId: string;
+  projectId?: string | null;
+  workspaceId?: string | null;
   agentType: string;
   promptPreview: string;
   createdAt: string;
