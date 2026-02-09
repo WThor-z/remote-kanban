@@ -305,6 +305,7 @@ function App() {
                 onClick={() => setIsWorkspaceScopeOpen(!isWorkspaceScopeOpen)}
                 disabled={!hasWorkspaces}
                 title={appCopy.actions.workspaceScope}
+                aria-label={appCopy.actions.workspaceScope}
               >
                 <span className="flex items-center gap-2 text-slate-200">
                   <Layers size={14} className="text-cyan-300" />
