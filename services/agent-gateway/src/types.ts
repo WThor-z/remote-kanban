@@ -9,6 +9,78 @@ export interface HostCapabilities {
   labels?: Record<string, string>;
 }
 
+export type MemoryScope = 'project' | 'host';
+export type MemoryKind = 'preference' | 'constraint' | 'fact' | 'workflow';
+export type MemorySource = 'auto_rule' | 'auto_llm' | 'manual';
+
+export interface MemoryItem {
+  id: string;
+  hostId: string;
+  projectId?: string;
+  scope: MemoryScope;
+  kind: MemoryKind;
+  content: string;
+  tags: string[];
+  confidence: number;
+  pinned: boolean;
+  enabled: boolean;
+  source: MemorySource;
+  sourceTaskId?: string;
+  createdAt: string;
+  updatedAt: string;
+  lastUsedAt?: string;
+  hitCount: number;
+}
+
+export interface MemorySettings {
+  enabled: boolean;
+  gatewayStoreEnabled: boolean;
+  rustStoreEnabled: boolean;
+  autoWrite: boolean;
+  promptInjection: boolean;
+  tokenBudget: number;
+  retrievalTopK: number;
+  llmExtractEnabled: boolean;
+}
+
+export interface MemorySettingsSnapshot extends MemorySettings {}
+
+export interface TaskMemoryMetadata {
+  projectId?: string;
+  taskId?: string;
+  taskTitle?: string;
+  taskDescription?: string;
+  memorySettingsSnapshot?: Partial<MemorySettingsSnapshot>;
+}
+
+export type GatewayMemoryAction =
+  | 'settings.get'
+  | 'settings.update'
+  | 'items.list'
+  | 'items.create'
+  | 'items.update'
+  | 'items.delete';
+
+export interface GatewayMemoryRequest {
+  requestId: string;
+  action: GatewayMemoryAction;
+  payload: Record<string, unknown>;
+}
+
+export interface GatewayMemoryResponse {
+  requestId: string;
+  ok: boolean;
+  data?: unknown;
+  error?: string;
+}
+
+export interface GatewayMemorySync {
+  hostId: string;
+  projectId?: string;
+  op: 'upsert' | 'delete';
+  items: MemoryItem[];
+}
+
 /** Task request sent from server to gateway */
 export interface TaskRequest {
   taskId: string;
@@ -18,7 +90,7 @@ export interface TaskRequest {
   model?: string;
   env?: Record<string, string>;
   timeout?: number;
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, unknown> & TaskMemoryMetadata;
 }
 
 /** Model information from OpenCode */
@@ -42,13 +114,13 @@ export interface ProviderInfo {
 }
 
 /** Gateway agent event types */
-export type GatewayAgentEventType = 
-  | 'log' 
-  | 'thinking' 
-  | 'tool_call' 
-  | 'tool_result' 
-  | 'file_change' 
-  | 'message' 
+export type GatewayAgentEventType =
+  | 'log'
+  | 'thinking'
+  | 'tool_call'
+  | 'tool_result'
+  | 'file_change'
+  | 'message'
   | 'error'
   | 'stdout'
   | 'stderr'
@@ -79,7 +151,9 @@ export type GatewayToServerMessage =
   | { type: 'task:event'; taskId: string; event: GatewayAgentEvent }
   | { type: 'task:completed'; taskId: string; result: TaskResult }
   | { type: 'task:failed'; taskId: string; error: string; details?: unknown }
-  | { type: 'models:response'; requestId: string; providers: ProviderInfo[] };
+  | { type: 'models:response'; requestId: string; providers: ProviderInfo[] }
+  | ({ type: 'memory:response' } & GatewayMemoryResponse)
+  | { type: 'memory:sync'; sync: GatewayMemorySync };
 
 /** Server -> Gateway messages */
 export type ServerToGatewayMessage =
@@ -88,7 +162,8 @@ export type ServerToGatewayMessage =
   | { type: 'task:execute'; task: TaskRequest }
   | { type: 'task:abort'; taskId: string }
   | { type: 'task:input'; taskId: string; content: string }
-  | { type: 'models:request'; requestId: string };
+  | { type: 'models:request'; requestId: string }
+  | ({ type: 'memory:request' } & GatewayMemoryRequest);
 
 /** Gateway connection options */
 export interface GatewayOptions {

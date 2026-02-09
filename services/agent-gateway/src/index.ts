@@ -8,7 +8,12 @@
 import { GatewayConnection } from './connection.js';
 import { TaskExecutor } from './executor.js';
 import { createGatewayConfig } from './config.js';
-import type { ServerToGatewayMessage, TaskRequest } from './types.js';
+import type {
+  GatewayMemoryAction,
+  GatewayMemorySync,
+  ServerToGatewayMessage,
+  TaskRequest,
+} from './types.js';
 
 const config = createGatewayConfig();
 
@@ -25,6 +30,15 @@ const connection = new GatewayConnection({
 const executor = new TaskExecutor({
   defaultCwd: config.capabilities.cwd,
   defaultAgent: 'opencode',
+  hostId: config.hostId,
+  memoryDataDir: config.memoryDataDir,
+  memorySettings: config.memory,
+  onMemorySync: (sync) => {
+    connection.send({
+      type: 'memory:sync',
+      sync: sync as GatewayMemorySync,
+    });
+  },
   serverPort: Number.parseInt(process.env.OPENCODE_PORT || '0', 10) || 0, // 0 = 随机端口
   allowedRoots: config.allowedProjectRoots,
 });
@@ -55,6 +69,9 @@ connection.on('message', async (msg: ServerToGatewayMessage) => {
       break;
     case 'models:request':
       await handleModelsRequest(msg.requestId);
+      break;
+    case 'memory:request':
+      await handleMemoryRequest(msg.requestId, msg.action, msg.payload ?? {});
       break;
   }
 });
@@ -144,11 +161,37 @@ async function handleModelsRequest(requestId: string): Promise<void> {
   }
 }
 
+async function handleMemoryRequest(
+  requestId: string,
+  action: GatewayMemoryAction,
+  payload: Record<string, unknown>
+): Promise<void> {
+  try {
+    const data = await executor.handleMemoryRequest(action, payload);
+    connection.send({
+      type: 'memory:response',
+      requestId,
+      ok: true,
+      data: data ?? null,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    connection.send({
+      type: 'memory:response',
+      requestId,
+      ok: false,
+      error: message,
+    });
+  }
+}
+
 // Startup
 console.log('[Gateway] Starting Agent Gateway (SDK mode)...');
 console.log(`[Gateway] Server: ${config.serverUrl}`);
 console.log(`[Gateway] Host ID: ${config.hostId}`);
 console.log(`[Gateway] Capabilities:`, config.capabilities);
+console.log(`[Gateway] Memory Data Dir: ${config.memoryDataDir}`);
+console.log(`[Gateway] Memory Settings:`, executor.getMemorySettings());
 if (config.allowedProjectRoots.length > 0) {
   console.log(`[Gateway] Allowed project roots: ${config.allowedProjectRoots.join(', ')}`);
 }

@@ -2,11 +2,30 @@ import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import path from 'path';
 import { createOpencodeClient } from '@opencode-ai/sdk';
-import type { TaskRequest, GatewayAgentEvent, TaskResult, ProviderInfo, ModelInfo } from './types.js';
+import { AgentMemoryManager } from './memory/index.js';
+import { defaultMemorySettings } from './memory/settings.js';
+import type {
+  TaskRequest,
+  GatewayAgentEvent,
+  TaskResult,
+  ProviderInfo,
+  ModelInfo,
+  MemoryItem,
+  MemorySettings,
+} from './types.js';
 
 export interface ExecutorOptions {
   defaultCwd: string;
   defaultAgent: string;
+  hostId?: string;
+  memoryDataDir?: string;
+  memorySettings?: MemorySettings;
+  onMemorySync?: (sync: {
+    hostId: string;
+    projectId?: string;
+    op: 'upsert' | 'delete';
+    items: MemoryItem[];
+  }) => void;
   /** OpenCode server port (will start server if not provided) */
   serverPort?: number;
   /** Allowed project roots for task cwd validation */
@@ -28,10 +47,30 @@ export class TaskExecutor extends EventEmitter {
   private serverUrl: string | null = null;
   private initPromise: Promise<void> | null = null;
   private allowedRoots: string[];
+  private memoryManager: AgentMemoryManager;
 
   constructor(private options: ExecutorOptions) {
     super();
     this.allowedRoots = (options.allowedRoots || []).map((root) => this.normalizePath(root));
+    const memorySettings =
+      options.memorySettings ??
+      {
+        ...defaultMemorySettings(),
+        enabled: false,
+        gatewayStoreEnabled: false,
+        rustStoreEnabled: false,
+        autoWrite: false,
+        promptInjection: false,
+        llmExtractEnabled: false,
+      };
+    const hostId = options.hostId ?? 'gateway-host';
+    const dataDir = options.memoryDataDir ?? path.join(options.defaultCwd, '.gateway-memory');
+    this.memoryManager = new AgentMemoryManager({
+      hostId,
+      dataDir,
+      settings: memorySettings,
+      onSync: options.onMemorySync,
+    });
   }
 
   private normalizePath(input: string): string {
@@ -56,7 +95,7 @@ export class TaskExecutor extends EventEmitter {
    */
   private async ensureInitialized(): Promise<void> {
     if (this.opencodeClient) return;
-    
+
     if (this.initPromise) {
       await this.initPromise;
       return;
@@ -68,18 +107,18 @@ export class TaskExecutor extends EventEmitter {
 
   private async initialize(): Promise<void> {
     console.log('[executor] Initializing OpenCode server...');
-    
+
     try {
       // 在 Windows 上使用 opencode.cmd，其他平台使用 opencode
       const isWindows = process.platform === 'win32';
       const command = isWindows ? 'opencode.cmd' : 'opencode';
       const port = this.options.serverPort || 0;
-      
+
       // 启动 opencode serve
       const args = ['serve', '--hostname=127.0.0.1', `--port=${port}`];
-      
+
       console.log(`[executor] Starting: ${command} ${args.join(' ')}`);
-      
+
       this.serverProcess = spawn(command, args, {
         cwd: this.options.defaultCwd,
         shell: isWindows, // Windows 需要 shell
@@ -94,7 +133,7 @@ export class TaskExecutor extends EventEmitter {
 
       // 等待服务器启动并获取 URL
       this.serverUrl = await this.waitForServerReady();
-      
+
       console.log(`[executor] OpenCode server started at ${this.serverUrl}`);
 
       // 创建客户端连接
@@ -105,7 +144,6 @@ export class TaskExecutor extends EventEmitter {
       // 验证连接 - 使用 session.list() 作为健康检查
       const sessions = await this.opencodeClient.session.list();
       console.log(`[executor] Connected to OpenCode (${sessions.data?.length ?? 0} existing sessions)`);
-
     } catch (error) {
       console.error('[executor] Failed to initialize OpenCode server:', error);
       this.cleanup();
@@ -134,14 +172,14 @@ export class TaskExecutor extends EventEmitter {
         const text = data.toString();
         output += text;
         console.log('[executor:stdout]', text.trim());
-        
+
         // 查找服务器 URL，格式类似: "Listening on http://127.0.0.1:4096"
         const urlMatch = text.match(/(?:listening on|server.*?at|started.*?on)\s*(https?:\/\/[\w.:]+)/i);
         if (urlMatch) {
           clearTimeout(timeout);
           resolve(urlMatch[1]);
         }
-        
+
         // 也检查 JSON 格式的输出
         try {
           const lines = text.split('\n');
@@ -196,12 +234,32 @@ export class TaskExecutor extends EventEmitter {
         duration: Date.now() - startTime,
       };
     }
-    
+
     try {
       await this.ensureInitialized();
+      await this.memoryManager.init();
 
       if (!this.opencodeClient) {
         throw new Error('OpenCode client not initialized');
+      }
+
+      let finalPrompt = task.prompt;
+      try {
+        const prepared = await this.memoryManager.preparePrompt(task, task.prompt);
+        finalPrompt = prepared.prompt;
+        if (prepared.injectedCount > 0) {
+          this.emitEvent(task.taskId, {
+            type: 'log',
+            content: `[memory] injected ${prepared.injectedCount} item(s), ~${prepared.estimatedTokens} tokens`,
+            timestamp: Date.now(),
+          });
+        }
+      } catch (memoryError) {
+        this.emitEvent(task.taskId, {
+          type: 'error',
+          content: `[memory] injection failed, fallback to raw prompt: ${String(memoryError)}`,
+          timestamp: Date.now(),
+        });
       }
 
       this.emitEvent(task.taskId, {
@@ -212,7 +270,7 @@ export class TaskExecutor extends EventEmitter {
 
       // 创建新的 session
       const sessionResult = await this.opencodeClient.session.create({
-        body: { 
+        body: {
           title: `Gateway Task: ${task.taskId}`,
         },
       });
@@ -238,7 +296,7 @@ export class TaskExecutor extends EventEmitter {
 
       // 解析模型参数
       const parsedModel = task.model ? this.parseModel(task.model) : undefined;
-      
+
       // 记录使用的模型
       if (parsedModel) {
         console.log(`[executor] Using model: ${parsedModel.providerID}/${parsedModel.modelID}`);
@@ -262,7 +320,7 @@ export class TaskExecutor extends EventEmitter {
         path: { id: session.id },
         body: {
           model: parsedModel,
-          parts: [{ type: 'text', text: task.prompt }],
+          parts: [{ type: 'text', text: finalPrompt }],
         },
       });
 
@@ -274,6 +332,30 @@ export class TaskExecutor extends EventEmitter {
 
       // 等待完成 (优先使用 SSE 流式模式)
       const output = await this.waitForSessionCompleteStreaming(task.taskId, session.id);
+
+      try {
+        const persisted = await this.memoryManager.postRunPersist({
+          task,
+          originalPrompt: task.prompt,
+          finalPrompt,
+          output,
+          model: task.model,
+          opencodeClient: this.opencodeClient,
+        });
+        if (persisted.count > 0) {
+          this.emitEvent(task.taskId, {
+            type: 'log',
+            content: `[memory] persisted ${persisted.count} memory item(s)`,
+            timestamp: Date.now(),
+          });
+        }
+      } catch (memoryError) {
+        this.emitEvent(task.taskId, {
+          type: 'error',
+          content: `[memory] persist failed (task still successful): ${String(memoryError)}`,
+          timestamp: Date.now(),
+        });
+      }
 
       const duration = Date.now() - startTime;
       this.activeTasks.delete(task.taskId);
@@ -312,7 +394,6 @@ export class TaskExecutor extends EventEmitter {
     }
 
     const timeout = 300000; // 5 分钟超时
-    const startTime = Date.now();
     let fullOutput = '';
 
     console.log(`[executor:streaming] Starting SSE streaming for session ${sessionId}`);
@@ -343,21 +424,19 @@ export class TaskExecutor extends EventEmitter {
           const eventType = payload?.type;
 
           // 过滤只处理当前 session 的事件
-          const eventSessionId = payload?.properties?.info?.sessionID || 
+          const eventSessionId = payload?.properties?.info?.sessionID ||
                                   payload?.properties?.part?.sessionID ||
                                   payload?.properties?.sessionID;
-          
+
           if (eventSessionId && eventSessionId !== sessionId) {
             continue; // 不是当前 session 的事件
           }
-
-          // console.log(`[executor:streaming] Event:`, eventType);
 
           switch (eventType) {
             case 'message.part.updated': {
               const part = payload.properties?.part;
               const delta = payload.properties?.delta;
-              
+
               if (part?.type === 'text') {
                 // 优先使用 delta（增量文本）
                 if (delta) {
@@ -382,7 +461,7 @@ export class TaskExecutor extends EventEmitter {
 
             case 'message.updated': {
               const msgInfo = payload.properties?.info;
-              
+
               // 检查是否有错误
               if (msgInfo?.error) {
                 const errorMsg = msgInfo.error.data?.message || msgInfo.error.name || 'Unknown error';
@@ -418,11 +497,10 @@ export class TaskExecutor extends EventEmitter {
         console.log(`[executor:streaming] Stream ended without idle event`);
         clearTimeout(timeoutId);
         resolve(fullOutput);
-
       } catch (error) {
         clearTimeout(timeoutId);
         console.error(`[executor:streaming] SSE error:`, error);
-        
+
         // 如果 SSE 失败，回退到轮询模式
         console.log(`[executor:streaming] Falling back to polling mode...`);
         try {
@@ -466,7 +544,7 @@ export class TaskExecutor extends EventEmitter {
         const messages = messagesResult.data;
         if (messages && messages.length > 0) {
           const assistantMessages = messages.filter((msg: any) => msg.info?.role === 'assistant');
-          
+
           if (assistantMessages.length > 0) {
             const lastAssistant = assistantMessages[assistantMessages.length - 1] as any;
             const msgInfo = lastAssistant.info;
@@ -483,12 +561,12 @@ export class TaskExecutor extends EventEmitter {
             // 获取文本内容
             const textParts = msgParts.filter((p: any) => p.type === 'text');
             const currentText = textParts.map((p: any) => p.text || '').join('');
-            
+
             // 只发送新增的内容
             if (currentText.length > lastOutputLength) {
               const newContent = currentText.slice(lastOutputLength);
               lastOutputLength = currentText.length;
-              
+
               this.emitEvent(taskId, {
                 type: 'stdout',
                 content: newContent,
@@ -538,7 +616,7 @@ export class TaskExecutor extends EventEmitter {
       if (task.abortController) {
         task.abortController.abort();
       }
-      
+
       // 尝试通过 SDK 中止 session
       if (this.opencodeClient && task.sessionId) {
         this.opencodeClient.session.abort({
@@ -558,6 +636,14 @@ export class TaskExecutor extends EventEmitter {
     // SDK 方式暂不支持交互式输入
     console.warn('[executor] sendInput not supported in SDK mode');
     return false;
+  }
+
+  async handleMemoryRequest(action: string, payload: Record<string, unknown>): Promise<unknown> {
+    return this.memoryManager.handleMemoryRequest(action, payload);
+  }
+
+  getMemorySettings(): MemorySettings {
+    return this.memoryManager.getSettings();
   }
 
   private emitEvent(taskId: string, event: GatewayAgentEvent): void {
@@ -593,12 +679,12 @@ export class TaskExecutor extends EventEmitter {
   /**
    * 获取可用的模型列表
    * 从 OpenCode 获取所有提供商及其模型
-   * 
+   *
    * @param connectedOnly - 如果为 true，只返回已连接（有 API key）的提供商
    */
   async getAvailableModels(connectedOnly: boolean = true): Promise<ProviderInfo[]> {
     console.log('[executor] getAvailableModels called, connectedOnly:', connectedOnly);
-    
+
     await this.ensureInitialized();
 
     if (!this.opencodeClient) {
@@ -609,13 +695,13 @@ export class TaskExecutor extends EventEmitter {
       // 获取提供商列表
       // @ts-ignore - provider.list 可能不在类型定义中
       const providersResult = await this.opencodeClient.provider.list();
-      
+
       // 打印原始响应用于调试
       console.log('[executor] Raw provider.list() response:', JSON.stringify(providersResult, null, 2).slice(0, 1000));
-      
+
       // 数据结构: { all: Provider[], default: {...}, connected: string[] }
       const providersData = providersResult.data;
-      
+
       if (!providersData) {
         console.log('[executor] No data in response');
         return [];
@@ -628,12 +714,12 @@ export class TaskExecutor extends EventEmitter {
 
       const allProviders = providersData.all;
       const connectedProviderIds = new Set(providersData.connected || []);
-      
+
       // 如果 connectedOnly 为 true，只处理已连接的提供商
-      const providers = connectedOnly 
+      const providers = connectedOnly
         ? allProviders.filter((p: any) => connectedProviderIds.has(p.id))
         : allProviders;
-      
+
       console.log(`[executor] Found ${allProviders.length} total providers, ${connectedProviderIds.size} connected: ${[...connectedProviderIds].join(', ')}`);
       console.log(`[executor] Processing ${providers.length} providers (connectedOnly=${connectedOnly})`);
 
@@ -641,7 +727,7 @@ export class TaskExecutor extends EventEmitter {
 
       for (const provider of providers) {
         const models: ModelInfo[] = [];
-        
+
         // 提取模型信息
         if (provider.models && typeof provider.models === 'object') {
           for (const [modelId, modelData] of Object.entries(provider.models)) {

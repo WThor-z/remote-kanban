@@ -1,5 +1,8 @@
 import os from 'node:os';
+import path from 'node:path';
 import type { HostCapabilities } from './types.js';
+import type { MemorySettings } from './types.js';
+import { memorySettingsFromEnv } from './memory/index.js';
 
 export interface GatewayRuntimeConfig {
   serverUrl: string;
@@ -7,6 +10,8 @@ export interface GatewayRuntimeConfig {
   authToken: string;
   capabilities: HostCapabilities;
   allowedProjectRoots: string[];
+  memory: MemorySettings;
+  memoryDataDir: string;
 }
 
 type EnvMap = Record<string, string | undefined>;
@@ -51,6 +56,7 @@ export const createGatewayConfig = (
 ): GatewayRuntimeConfig => {
   const resolvedHostName = hostName.trim() || 'Gateway Host';
   const hostId = (env.GATEWAY_HOST_ID || '').trim() || `host-${sanitizeHostId(resolvedHostName)}`;
+  const memoryDataDir = (env.MEMORY_DATA_DIR || '').trim() || path.join(cwd, '.gateway-memory');
 
   return {
     serverUrl: (env.GATEWAY_SERVER_URL || '').trim() || DEFAULT_SERVER_URL,
@@ -63,5 +69,7 @@ export const createGatewayConfig = (
       cwd: (env.GATEWAY_CWD || '').trim() || cwd,
     },
     allowedProjectRoots: parseAllowedProjectRoots(env.GATEWAY_ALLOWED_PROJECT_ROOTS),
+    memory: memorySettingsFromEnv(env),
+    memoryDataDir,
   };
 };
