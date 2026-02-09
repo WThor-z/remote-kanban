@@ -1,7 +1,7 @@
 //! Project API routes
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::get,
     Json, Router,
@@ -12,10 +12,29 @@ use uuid::Uuid;
 use crate::state::AppState;
 use vk_core::project::ProjectSummary;
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListProjectsQuery {
+    #[serde(default)]
+    pub workspace_id: Option<Uuid>,
+}
+
 /// List all projects
-async fn list_projects(State(state): State<AppState>) -> Json<Vec<ProjectSummary>> {
+async fn list_projects(
+    State(state): State<AppState>,
+    Query(query): Query<ListProjectsQuery>,
+) -> Json<Vec<ProjectSummary>> {
     let projects = state.project_store().list().await;
-    Json(projects)
+    Json(
+        projects
+            .into_iter()
+            .filter(|project| {
+                query
+                    .workspace_id
+                    .is_none_or(|workspace_id| project.workspace_id == workspace_id)
+            })
+            .collect(),
+    )
 }
 
 /// Project detail response
@@ -225,6 +244,85 @@ mod tests {
             .find(|entry| entry["id"] == project.id.to_string())
             .unwrap();
         assert_eq!(listed["workspaceId"], workspace.id.to_string());
+    }
+
+    #[tokio::test]
+    async fn list_projects_supports_workspace_filter() {
+        let (state, _temp_dir) = build_state().await;
+
+        let workspace_one = state
+            .workspace_store()
+            .create(CreateWorkspaceRequest {
+                name: "Workspace One".to_string(),
+                slug: Some("workspace-one".to_string()),
+                root_path: "/tmp/workspace-one".to_string(),
+                default_project_id: None,
+            })
+            .await
+            .unwrap();
+        let workspace_two = state
+            .workspace_store()
+            .create(CreateWorkspaceRequest {
+                name: "Workspace Two".to_string(),
+                slug: Some("workspace-two".to_string()),
+                root_path: "/tmp/workspace-two".to_string(),
+                default_project_id: None,
+            })
+            .await
+            .unwrap();
+
+        let project_one = state
+            .project_store()
+            .register(
+                Uuid::new_v4(),
+                CreateProjectRequest {
+                    name: "project-one".to_string(),
+                    local_path: "/tmp/project-one".to_string(),
+                    remote_url: None,
+                    default_branch: None,
+                    worktree_dir: None,
+                    workspace_id: workspace_one.id,
+                },
+            )
+            .await
+            .unwrap();
+
+        state
+            .project_store()
+            .register(
+                Uuid::new_v4(),
+                CreateProjectRequest {
+                    name: "project-two".to_string(),
+                    local_path: "/tmp/project-two".to_string(),
+                    remote_url: None,
+                    default_branch: None,
+                    worktree_dir: None,
+                    workspace_id: workspace_two.id,
+                },
+            )
+            .await
+            .unwrap();
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/projects?workspaceId={}", workspace_one.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        let listed = payload.as_array().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["id"], project_one.id.to_string());
+        assert_eq!(listed[0]["workspaceId"], workspace_one.id.to_string());
     }
 
     #[tokio::test]

@@ -28,12 +28,17 @@ export type ConflictStrategy = 'ai_resolve' | 'keep_branch';
 export interface Project {
   id: string;
   gatewayId: string;
+  workspaceId: string;
   name: string;
   localPath: string;
   remoteUrl: string | null;
   defaultBranch: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface UseProjectsOptions {
+  workspaceId?: string;
 }
 
 export interface UseProjectsResult {
@@ -53,7 +58,7 @@ export interface UseProjectsResult {
   hasProjects: boolean;
 }
 
-export const useProjects = (): UseProjectsResult => {
+export const useProjects = ({ workspaceId }: UseProjectsOptions = {}): UseProjectsResult => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +68,12 @@ export const useProjects = (): UseProjectsResult => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${baseUrl}/api/projects`);
+      const params = new URLSearchParams();
+      if (workspaceId) {
+        params.set('workspaceId', workspaceId);
+      }
+      const query = params.toString();
+      const response = await fetch(`${baseUrl}/api/projects${query ? `?${query}` : ''}`);
       if (!response.ok) {
         throw new Error(`Failed to fetch projects (${response.status})`);
       }
@@ -77,7 +87,7 @@ export const useProjects = (): UseProjectsResult => {
     } finally {
       setIsLoading(false);
     }
-  }, [baseUrl]);
+  }, [baseUrl, workspaceId]);
 
   useEffect(() => {
     fetchProjects();
