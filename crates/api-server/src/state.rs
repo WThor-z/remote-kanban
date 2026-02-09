@@ -14,6 +14,7 @@ use vk_core::task::FileTaskStore;
 use vk_core::workspace::{CreateWorkspaceRequest, WorkspaceStore, WorkspaceSummary};
 
 use crate::gateway::GatewayManager;
+use crate::memory::MemoryStore;
 
 /// Shared application state
 #[derive(Clone)]
@@ -31,6 +32,7 @@ struct AppStateInner {
     pub repo_path: PathBuf,
     pub socket_io: Arc<RwLock<Option<SocketIo>>>,
     pub gateway_manager: Arc<GatewayManager>,
+    pub memory_store: Arc<MemoryStore>,
 }
 
 impl AppState {
@@ -83,6 +85,11 @@ impl AppState {
 
         let project_path = data_dir.join("projects.json");
         let project_store = Arc::new(ProjectStore::new(project_path, default_workspace_id).await?);
+        let memory_store = Arc::new(
+            MemoryStore::new(data_dir.join("memory"))
+                .await
+                .map_err(|e| vk_core::Error::Storage(format!("Failed to initialize memory store: {}", e)))?,
+        );
 
         // Create executor config
         let executor_config = ExecutorConfig {
@@ -111,6 +118,7 @@ impl AppState {
                 repo_path,
                 socket_io: Arc::new(RwLock::new(None)),
                 gateway_manager,
+                memory_store,
             }),
         })
     }
@@ -189,6 +197,14 @@ impl AppState {
     /// Get shared Arc to the gateway manager
     pub fn gateway_manager_arc(&self) -> Arc<GatewayManager> {
         Arc::clone(&self.inner.gateway_manager)
+    }
+
+    pub fn memory_store(&self) -> &MemoryStore {
+        &self.inner.memory_store
+    }
+
+    pub fn memory_store_arc(&self) -> Arc<MemoryStore> {
+        Arc::clone(&self.inner.memory_store)
     }
 }
 

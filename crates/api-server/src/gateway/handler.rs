@@ -210,6 +210,21 @@ async fn handle_gateway_message(
         } => {
             manager.handle_models_response(&request_id, providers).await;
         }
+
+        GatewayToServerMessage::MemoryResponse {
+            request_id,
+            ok,
+            data,
+            error,
+        } => {
+            manager
+                .handle_memory_response(&request_id, ok, data, error)
+                .await;
+        }
+
+        GatewayToServerMessage::MemorySync { sync } => {
+            manager.handle_memory_sync(sync).await;
+        }
     }
 }
 

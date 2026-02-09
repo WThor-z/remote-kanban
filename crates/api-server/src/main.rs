@@ -4,6 +4,7 @@
 //! It provides REST API on port 8081 and Socket.IO on port 8080.
 
 mod gateway;
+mod memory;
 mod routes;
 mod socket;
 mod state;
@@ -78,6 +79,9 @@ async fn main() {
 
     // Set Socket.IO instance in AppState
     app_state.set_socket_io(io.clone()).await;
+    gateway_manager
+        .set_memory_store(app_state.memory_store_arc())
+        .await;
 
 // REST API server (port 8081)
     let rest_app = Router::new()
@@ -86,6 +90,7 @@ async fn main() {
         .merge(routes::project::router())
         .merge(routes::workspace::router())
         .merge(routes::executor::router())
+        .merge(routes::memory::router())
         .with_state(app_state.clone())
         .merge(routes::gateway::router(app_state.gateway_manager_arc()))
         .layer(

@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::memory::MemoryItem;
+
 /// Host capabilities - describes what agents a host supports
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +33,40 @@ pub struct GatewayTaskRequest {
     pub timeout: Option<u64>,
     #[serde(default)]
     pub metadata: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum GatewayMemoryAction {
+    #[serde(rename = "settings.get")]
+    SettingsGet,
+    #[serde(rename = "settings.update")]
+    SettingsUpdate,
+    #[serde(rename = "items.list")]
+    ItemsList,
+    #[serde(rename = "items.create")]
+    ItemsCreate,
+    #[serde(rename = "items.update")]
+    ItemsUpdate,
+    #[serde(rename = "items.delete")]
+    ItemsDelete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum GatewayMemorySyncOp {
+    Upsert,
+    Delete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayMemorySync {
+    pub host_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    pub op: GatewayMemorySyncOp,
+    #[serde(default)]
+    pub items: Vec<MemoryItem>,
 }
 
 /// Gateway agent event types
@@ -126,6 +162,18 @@ pub enum GatewayToServerMessage {
         request_id: String,
         providers: Vec<ProviderInfo>,
     },
+    #[serde(rename = "memory:response")]
+    MemoryResponse {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        ok: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    #[serde(rename = "memory:sync")]
+    MemorySync { sync: GatewayMemorySync },
 }
 
 /// Server -> Gateway messages
@@ -157,6 +205,14 @@ pub enum ServerToGatewayMessage {
     ModelsRequest {
         #[serde(rename = "requestId")]
         request_id: String,
+    },
+    #[serde(rename = "memory:request")]
+    MemoryRequest {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        action: GatewayMemoryAction,
+        #[serde(default)]
+        payload: serde_json::Value,
     },
 }
 

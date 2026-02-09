@@ -7,6 +7,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
 use tracing::{debug, error, info, warn};
 
 use super::protocol::*;
+use crate::memory::MemoryStore;
 use vk_core::kanban::{KanbanStore, KanbanTaskStatus};
 use vk_core::task::{FileTaskStore, TaskRepository, TaskStatus};
 
@@ -42,10 +43,15 @@ pub struct GatewayManager {
     event_tx: broadcast::Sender<BroadcastTaskEvent>,
     /// Pending model requests - maps request_id to response sender
     pending_model_requests: Arc<RwLock<HashMap<String, oneshot::Sender<Vec<ProviderInfo>>>>>,
+    /// Pending memory requests - maps request_id to response sender
+    pending_memory_requests:
+        Arc<RwLock<HashMap<String, oneshot::Sender<Result<serde_json::Value, String>>>>>,
     /// Task store for updating task status
     task_store: Option<Arc<FileTaskStore>>,
     /// Kanban store for updating kanban board
     kanban_store: Option<Arc<KanbanStore>>,
+    /// Optional central memory store used for memory:sync mirroring
+    memory_store: Arc<RwLock<Option<Arc<MemoryStore>>>>,
 }
 
 impl GatewayManager {
@@ -56,8 +62,10 @@ impl GatewayManager {
             connections: Arc::new(RwLock::new(HashMap::new())),
             event_tx,
             pending_model_requests: Arc::new(RwLock::new(HashMap::new())),
+            pending_memory_requests: Arc::new(RwLock::new(HashMap::new())),
             task_store: None,
             kanban_store: None,
+            memory_store: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -68,8 +76,10 @@ impl GatewayManager {
             connections: Arc::new(RwLock::new(HashMap::new())),
             event_tx,
             pending_model_requests: Arc::new(RwLock::new(HashMap::new())),
+            pending_memory_requests: Arc::new(RwLock::new(HashMap::new())),
             task_store: Some(task_store),
             kanban_store: Some(kanban_store),
+            memory_store: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -83,6 +93,11 @@ impl GatewayManager {
     #[allow(dead_code)]
     pub fn set_kanban_store(&mut self, kanban_store: Arc<KanbanStore>) {
         self.kanban_store = Some(kanban_store);
+    }
+
+    pub async fn set_memory_store(&self, memory_store: Arc<MemoryStore>) {
+        let mut guard = self.memory_store.write().await;
+        *guard = Some(memory_store);
     }
 
     /// Subscribe to task events (for forwarding to frontend)
@@ -440,6 +455,102 @@ impl GatewayManager {
             debug!("Delivered models response for request {}", request_id);
         } else {
             warn!("Received models response for unknown request {}", request_id);
+        }
+    }
+
+    pub async fn request_memory(
+        &self,
+        host_id: &str,
+        action: GatewayMemoryAction,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let connections = self.connections.read().await;
+        let conn = connections
+            .get(host_id)
+            .ok_or_else(|| format!("Host {} not found", host_id))?;
+
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let (tx, rx) = oneshot::channel();
+
+        {
+            let mut pending = self.pending_memory_requests.write().await;
+            pending.insert(request_id.clone(), tx);
+        }
+
+        conn.tx
+            .send(ServerToGatewayMessage::MemoryRequest {
+                request_id: request_id.clone(),
+                action,
+                payload,
+            })
+            .await
+            .map_err(|e| {
+                let pending = self.pending_memory_requests.clone();
+                let req_id = request_id.clone();
+                tokio::spawn(async move {
+                    pending.write().await.remove(&req_id);
+                });
+                format!("Failed to send memory request: {}", e)
+            })?;
+
+        drop(connections);
+
+        match tokio::time::timeout(Duration::from_secs(30), rx).await {
+            Ok(Ok(Ok(data))) => Ok(data),
+            Ok(Ok(Err(error))) => Err(error),
+            Ok(Err(_)) => Err("Memory request was cancelled".to_string()),
+            Err(_) => {
+                self.pending_memory_requests.write().await.remove(&request_id);
+                Err("Memory request timed out".to_string())
+            }
+        }
+    }
+
+    pub async fn handle_memory_response(
+        &self,
+        request_id: &str,
+        ok: bool,
+        data: Option<serde_json::Value>,
+        error: Option<String>,
+    ) {
+        let mut pending = self.pending_memory_requests.write().await;
+        if let Some(tx) = pending.remove(request_id) {
+            let result = if ok {
+                Ok(data.unwrap_or(serde_json::Value::Null))
+            } else {
+                Err(error.unwrap_or_else(|| "Unknown memory request error".to_string()))
+            };
+            let _ = tx.send(result);
+            debug!("Delivered memory response for request {}", request_id);
+        } else {
+            warn!("Received memory response for unknown request {}", request_id);
+        }
+    }
+
+    pub async fn handle_memory_sync(&self, sync: GatewayMemorySync) {
+        let store = self.memory_store.read().await.clone();
+        let Some(store) = store else {
+            debug!(
+                "Ignoring memory sync from host {} because central memory store is not configured",
+                sync.host_id
+            );
+            return;
+        };
+
+        let result = match sync.op {
+            GatewayMemorySyncOp::Upsert => store.upsert_items(&sync.items).await,
+            GatewayMemorySyncOp::Delete => store.delete_items(&sync.items).await,
+        };
+
+        match result {
+            Ok(changed) => debug!(
+                "Applied memory sync from host {} with op {:?}, changed={}",
+                sync.host_id, sync.op, changed
+            ),
+            Err(err) => warn!(
+                "Failed to apply memory sync from host {}: {}",
+                sync.host_id, err
+            ),
         }
     }
 

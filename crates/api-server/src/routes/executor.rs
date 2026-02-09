@@ -187,6 +187,8 @@ async fn start_execution(
         &prompt,
         &req.agent_type,
         &project.gateway_id.to_string(),
+        &task.title,
+        task.description.as_deref(),
         &project.local_path,
         req.model.as_deref(),
         &base_branch,
@@ -203,6 +205,8 @@ async fn dispatch_to_gateway(
     prompt: &str,
     agent_type: &str,
     target_host: &str,
+    task_title: &str,
+    task_description: Option<&str>,
     cwd: &str,
     model: Option<&str>,
     base_branch: &str,
@@ -210,6 +214,7 @@ async fn dispatch_to_gateway(
     workspace_id: Uuid,
 ) -> Result<(StatusCode, Json<ExecutionResponse>), (StatusCode, Json<ErrorResponse>)> {
     let gateway_manager = state.gateway_manager();
+    let memory_settings_snapshot = serde_json::to_value(state.memory_store().get_settings().await).ok();
 
     let gateway_task = GatewayTaskRequest {
         task_id: task_id.to_string(),
@@ -222,6 +227,10 @@ async fn dispatch_to_gateway(
         metadata: serde_json::json!({
             "projectId": project_id,
             "workspaceId": workspace_id,
+            "taskId": task_id,
+            "taskTitle": task_title,
+            "taskDescription": task_description,
+            "memorySettingsSnapshot": memory_settings_snapshot,
         }),
     };
 
