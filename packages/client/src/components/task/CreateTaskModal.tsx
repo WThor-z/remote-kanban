@@ -12,6 +12,7 @@ import type { AgentType } from '@opencode-vibe/protocol';
 import { useModels } from '../../hooks/useModels';
 import { useProjects } from '../../hooks/useProjects';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
+import { useWorkspaceScope } from '../../context/workspaceScopeContext';
 import { getConsoleLexiconSection } from '../../lexicon/consoleLexicon';
 
 interface CreateTaskModalProps {
@@ -41,12 +42,14 @@ export function CreateTaskModal({
   defaultWorkspaceId,
 }: CreateTaskModalProps) {
   const copy = getConsoleLexiconSection('createTaskModal');
+  const { activeWorkspaceId } = useWorkspaceScope();
+  const initialWorkspaceScope = defaultWorkspaceId ?? activeWorkspaceId;
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [agentType, setAgentType] = useState<AgentType>('opencode');
   const [isAgentOpen, setIsAgentOpen] = useState(false);
   const [baseBranch, setBaseBranch] = useState('main');
-  const [workspaceId, setWorkspaceId] = useState(defaultWorkspaceId || '');
+  const [workspaceId, setWorkspaceId] = useState(initialWorkspaceScope || '');
   const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
   const [projectId, setProjectId] = useState('');
   const [isProjectOpen, setIsProjectOpen] = useState(false);
@@ -92,7 +95,7 @@ export function CreateTaskModal({
       setDescription('');
       setAgentType('opencode');
       setBaseBranch('main');
-      setWorkspaceId(defaultWorkspaceId || '');
+      setWorkspaceId(initialWorkspaceScope || '');
       setIsWorkspaceOpen(false);
       setProjectId('');
       setIsProjectOpen(false);
@@ -101,7 +104,7 @@ export function CreateTaskModal({
       setModelSearch('');
       setLocalError(null);
     }
-  }, [defaultWorkspaceId, isOpen]);
+  }, [initialWorkspaceScope, isOpen]);
 
   // Handle keyboard shortcut to close
   useEffect(() => {

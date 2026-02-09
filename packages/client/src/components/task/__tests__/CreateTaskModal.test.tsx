@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { CreateTaskModal } from '../CreateTaskModal';
 import { useModels } from '../../../hooks/useModels';
 import { useProjects } from '../../../hooks/useProjects';
+import { WorkspaceScopeProvider } from '../../../context/workspaceScopeContext';
 
 const { useWorkspacesMock } = vi.hoisted(() => ({
   useWorkspacesMock: vi.fn(),
@@ -143,6 +144,22 @@ describe('CreateTaskModal workspace filtering', () => {
 
     await waitFor(() => {
       expect(useProjects).toHaveBeenLastCalledWith({ workspaceId: 'ws-1' });
+    });
+  });
+
+  it('falls back to workspace scope context when defaultWorkspaceId is absent', async () => {
+    render(
+      <WorkspaceScopeProvider value={{ activeWorkspaceId: 'ws-2', setActiveWorkspaceId: vi.fn() }}>
+        <CreateTaskModal
+          isOpen
+          onClose={onClose}
+          onCreate={onCreate}
+        />
+      </WorkspaceScopeProvider>,
+    );
+
+    await waitFor(() => {
+      expect(useProjects).toHaveBeenLastCalledWith({ workspaceId: 'ws-2' });
     });
   });
 });

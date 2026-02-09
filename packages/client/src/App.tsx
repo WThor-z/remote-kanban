@@ -14,6 +14,7 @@ import { resolveApiBaseUrl, resolveGatewaySocketUrl } from './config/endpoints';
 import { getConsoleLexiconSection } from './lexicon/consoleLexicon';
 import { readStoredWorkspaceScope, storeWorkspaceScope } from './utils/workspaceScopeStorage';
 import { filterBoardByVisibleTaskIds } from './utils/kanbanBoardFilter';
+import { WorkspaceScopeProvider } from './context/workspaceScopeContext';
 
 const SKIN_STORAGE_KEY = 'vk-console-skin';
 
@@ -271,8 +272,9 @@ function App() {
   }, [skin]);
 
   return (
-    <div className={`console-root ${isLabSkin ? 'console-root--lab' : ''}`}>
-      <div className="console-shell">
+    <WorkspaceScopeProvider value={{ activeWorkspaceId, setActiveWorkspaceId }}>
+      <div className={`console-root ${isLabSkin ? 'console-root--lab' : ''}`}>
+        <div className="console-shell">
         <section className="tech-panel command-panel reveal">
           <div className="command-panel__top">
             <div>
@@ -447,17 +449,18 @@ function App() {
         />
       )}
 
-        <CreateTaskModal
-          isOpen={isCreateModalOpen}
-          onClose={handleCloseCreateModal}
-          onCreate={handleCreateTask}
-          onCreateAndStart={handleCreateAndStartTask}
-          isLoading={isTaskApiLoading}
-          error={taskApiError}
-          defaultWorkspaceId={activeWorkspaceId || undefined}
-        />
+          <CreateTaskModal
+            isOpen={isCreateModalOpen}
+            onClose={handleCloseCreateModal}
+            onCreate={handleCreateTask}
+            onCreateAndStart={handleCreateAndStartTask}
+            isLoading={isTaskApiLoading}
+            error={taskApiError}
+            defaultWorkspaceId={activeWorkspaceId || undefined}
+          />
+        </div>
       </div>
-    </div>
+    </WorkspaceScopeProvider>
   )
 }
 
