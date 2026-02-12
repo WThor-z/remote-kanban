@@ -2,16 +2,18 @@ import React, { useEffect, useRef } from 'react';
 import { useExecutionEvents } from '../../hooks/useExecutionEvents';
 import { Terminal } from 'lucide-react';
 import { ExecutionEventList } from './ExecutionEventList';
-import { CONSOLE_LEXICON } from '../../lexicon/consoleLexicon';
+import { getConsoleLexiconSection } from '../../lexicon/consoleLexicon';
+import type { ConsoleLanguage } from '../../i18n/consoleLanguage';
 
 interface Props {
   taskId: string;
   onSendInput?: (taskId: string, content: string) => Promise<boolean>;
   isRunning?: boolean;
+  language?: ConsoleLanguage;
 }
 
-export const ExecutionLogPanel: React.FC<Props> = ({ taskId, onSendInput, isRunning }) => {
-  const copy = CONSOLE_LEXICON.executionLogPanel;
+export const ExecutionLogPanel: React.FC<Props> = ({ taskId, onSendInput, isRunning, language = 'en' }) => {
+  const copy = getConsoleLexiconSection('executionLogPanel', language);
   const { events } = useExecutionEvents(taskId);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [input, setInput] = React.useState('');
@@ -44,7 +46,7 @@ export const ExecutionLogPanel: React.FC<Props> = ({ taskId, onSendInput, isRunn
             {copy.empty}
           </div>
         )}
-        <ExecutionEventList events={events} />
+        <ExecutionEventList events={events} language={language} />
         <div ref={bottomRef} />
       </div>
 

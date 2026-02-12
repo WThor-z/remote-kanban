@@ -776,6 +776,16 @@ pre {
   overflow-y: auto;
 }
 
+.workspace-project-list {
+  margin-top: 0.28rem;
+  border-radius: 0.68rem;
+  border: 1px solid rgba(104, 143, 173, 0.42);
+  background: #0a1928;
+  box-shadow: 0 18px 30px rgba(0, 5, 11, 0.48);
+  overflow-y: auto;
+  max-height: 15rem;
+}
+
 .dropdown-item {
   width: 100%;
   text-align: left;
@@ -1238,6 +1248,16 @@ pre {
   100% {
     transform: translateY(0) scale(1);
   }
+}
+
+.workspace-entry__actions {
+  justify-content: flex-start;
+}
+
+.workspace-entry__grid {
+  display: grid;
+  gap: 1.2rem;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
 @media (max-width: 1120px) {

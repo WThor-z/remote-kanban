@@ -6,6 +6,10 @@ import type {
   MemoryScope,
   MemoryUpdateInput,
 } from '../../hooks/useMemoryApi';
+import {
+  getConsoleLanguageCopy,
+  type ConsoleLanguage,
+} from '../../i18n/consoleLanguage';
 
 interface MemoryItemEditorProps {
   mode: 'create' | 'edit';
@@ -15,6 +19,7 @@ interface MemoryItemEditorProps {
   onCancel: () => void;
   onCreate: (input: MemoryCreateInput) => Promise<void>;
   onUpdate: (id: string, patch: MemoryUpdateInput) => Promise<void>;
+  language?: ConsoleLanguage;
 }
 
 const kinds: MemoryKind[] = ['preference', 'constraint', 'fact', 'workflow'];
@@ -28,7 +33,11 @@ export function MemoryItemEditor({
   onCancel,
   onCreate,
   onUpdate,
+  language = 'en',
 }: MemoryItemEditorProps) {
+  const copy = getConsoleLanguageCopy(language).memory.editor;
+  const kindCopy = getConsoleLanguageCopy(language).memory.kindOptions;
+  const scopeCopy = getConsoleLanguageCopy(language).memory;
   const seed = useMemo(
     () => ({
       scope: initial?.scope ?? 'project',
@@ -99,44 +108,44 @@ export function MemoryItemEditor({
     <div className="memory-editor">
       <div className="memory-editor__grid">
         <label className="field">
-          <span className="field-label">Host ID</span>
+          <span className="field-label">{copy.hostId}</span>
           <input className="glass-input" value={host} onChange={(event) => setHost(event.target.value)} />
         </label>
         <label className="field">
-          <span className="field-label">Project ID</span>
+          <span className="field-label">{copy.projectId}</span>
           <input
             className="glass-input"
             value={projectId}
             onChange={(event) => setProjectId(event.target.value)}
-            placeholder="Optional for scope=host"
+            placeholder={copy.projectIdPlaceholder}
           />
         </label>
         <label className="field">
-          <span className="field-label">Scope</span>
+          <span className="field-label">{copy.scope}</span>
           <select className="glass-select" value={scope} onChange={(event) => setScope(event.target.value as MemoryScope)}>
             {scopes.map((item) => (
               <option key={item} value={item}>
-                {item}
+                {item === 'project' ? scopeCopy.project : scopeCopy.host}
               </option>
             ))}
           </select>
         </label>
         <label className="field">
-          <span className="field-label">Kind</span>
+          <span className="field-label">{copy.kind}</span>
           <select className="glass-select" value={kind} onChange={(event) => setKind(event.target.value as MemoryKind)}>
             {kinds.map((item) => (
               <option key={item} value={item}>
-                {item}
+                {kindCopy[item]}
               </option>
             ))}
           </select>
         </label>
         <label className="field">
-          <span className="field-label">Tags (comma separated)</span>
+          <span className="field-label">{copy.tags}</span>
           <input className="glass-input" value={tags} onChange={(event) => setTags(event.target.value)} />
         </label>
         <label className="field">
-          <span className="field-label">Confidence (0-1)</span>
+          <span className="field-label">{copy.confidence}</span>
           <input
             className="glass-input"
             type="number"
@@ -150,32 +159,32 @@ export function MemoryItemEditor({
       </div>
 
       <label className="field">
-        <span className="field-label">Content</span>
+        <span className="field-label">{copy.content}</span>
         <textarea
           className="glass-textarea"
           value={content}
           onChange={(event) => setContent(event.target.value)}
-          placeholder="Durable memory content..."
+          placeholder={copy.contentPlaceholder}
         />
       </label>
 
       <div className="memory-editor__flags">
         <label className="memory-toggle">
           <input type="checkbox" checked={pinned} onChange={(event) => setPinned(event.target.checked)} />
-          <span>Pinned</span>
+          <span>{copy.pinned}</span>
         </label>
         <label className="memory-toggle">
           <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
-          <span>Enabled</span>
+          <span>{copy.enabled}</span>
         </label>
       </div>
 
       <div className="memory-editor__actions">
         <button type="button" className="tech-btn tech-btn-secondary" onClick={onCancel} disabled={isLoading}>
-          Cancel
+          {copy.cancel}
         </button>
         <button type="button" className="tech-btn tech-btn-primary" onClick={submit} disabled={isLoading || !content.trim()}>
-          {mode === 'create' ? 'Create Memory' : 'Update Memory'}
+          {mode === 'create' ? copy.createMemory : copy.updateMemory}
         </button>
       </div>
     </div>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { KanbanTask } from '@opencode-vibe/protocol';
 import { Trash2, Play, Loader2 } from 'lucide-react';
+import type { ConsoleLanguage } from '../../i18n/consoleLanguage';
 
 interface TaskCardProps {
   task: KanbanTask;
@@ -8,6 +9,7 @@ interface TaskCardProps {
   onClick?: (task: KanbanTask) => void;
   isDragging?: boolean;
   isExecuting?: boolean;
+  language?: ConsoleLanguage;
 }
 
 const statusColors = {
@@ -17,12 +19,28 @@ const statusColors = {
 } as const;
 
 const statusLabels = {
-  todo: 'todo',
-  doing: 'doing',
-  done: 'done',
+  en: {
+    todo: 'todo',
+    doing: 'doing',
+    done: 'done',
+    delete: 'Delete task',
+  },
+  zh: {
+    todo: '待办',
+    doing: '进行中',
+    done: '已完成',
+    delete: '删除任务',
+  },
 } as const;
 
-export const TaskCard = ({ task, onDelete, onClick, isDragging = false, isExecuting = false }: TaskCardProps) => {
+export const TaskCard = ({
+  task,
+  onDelete,
+  onClick,
+  isDragging = false,
+  isExecuting = false,
+  language = 'en',
+}: TaskCardProps) => {
   const [flowClass, setFlowClass] = useState('');
   const previousStatusRef = useRef(task.status);
 
@@ -114,7 +132,7 @@ export const TaskCard = ({ task, onDelete, onClick, isDragging = false, isExecut
                 e.stopPropagation();
                 onDelete(task.id);
               }}
-              aria-label="删除"
+              aria-label={statusLabels[language].delete}
               className="task-card__icon-btn text-slate-500 hover:text-rose-400 transition-colors p-1 -m-1"
             >
               <Trash2 size={14} />
@@ -125,7 +143,7 @@ export const TaskCard = ({ task, onDelete, onClick, isDragging = false, isExecut
 
       <div className="task-card__meta">
         <span data-testid="task-status" className={`task-card__status task-card__status--${task.status}`}>
-          {statusLabels[task.status]}
+          {statusLabels[language][task.status]}
         </span>
         <span className="task-card__time">{createdAtLabel}</span>
       </div>

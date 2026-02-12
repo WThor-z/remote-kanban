@@ -6,6 +6,10 @@ import { useHosts } from '../../hooks/useHosts';
 import { useProjects } from '../../hooks/useProjects';
 import { useWorkspaceScope } from '../../context/workspaceScopeContext';
 import {
+  getConsoleLanguageCopy,
+  type ConsoleLanguage,
+} from '../../i18n/consoleLanguage';
+import {
   useMemoryApi,
   type MemoryCreateInput,
   type MemoryItem,
@@ -25,7 +29,12 @@ const formatDate = (raw: string): string => {
 
 const pageSize = 20;
 
-export function MemoryPage() {
+interface MemoryPageProps {
+  language?: ConsoleLanguage;
+}
+
+export function MemoryPage({ language = 'en' }: MemoryPageProps) {
+  const copy = getConsoleLanguageCopy(language).memory;
   const { activeWorkspaceId } = useWorkspaceScope();
   const [hostId, setHostId] = useState('');
   const [projectId, setProjectId] = useState('');
@@ -148,7 +157,7 @@ export function MemoryPage() {
             onClick={refresh}
             disabled={isLoading}
           >
-            <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} /> Refresh
+            <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} /> {copy.refresh}
           </button>
           <button
             type="button"
@@ -158,7 +167,7 @@ export function MemoryPage() {
               setEditingItem(null);
             }}
           >
-            <Plus size={14} /> New Memory
+            <Plus size={14} /> {copy.newMemory}
           </button>
         </div>
       </div>
@@ -167,26 +176,31 @@ export function MemoryPage() {
         <div className="alert-error">
           <div>{error}</div>
           <button type="button" className="tech-btn tech-btn-secondary" onClick={clearError}>
-            Dismiss
+            {copy.dismiss}
           </button>
         </div>
       )}
 
       <div className="memory-layout">
         <div className="info-block info-block--accent">
-          <h3 className="info-title">Settings</h3>
-          <MemorySettingsPanel settings={settings} isLoading={isLoading} onSave={handleSaveSettings} />
+          <h3 className="info-title">{copy.settingsTitle}</h3>
+          <MemorySettingsPanel
+            settings={settings}
+            isLoading={isLoading}
+            onSave={handleSaveSettings}
+            language={language}
+          />
         </div>
 
         <div className="info-block">
-          <h3 className="info-title">Filter</h3>
+          <h3 className="info-title">{copy.filterTitle}</h3>
           <div className="memory-filter-grid">
             <label className="field">
-              <span className="field-label">Host ID</span>
+              <span className="field-label">{copy.hostId}</span>
               <input className="glass-input" value={hostId} onChange={(event) => setHostId(event.target.value)} />
             </label>
             <label className="field">
-              <span className="field-label">Project ID</span>
+              <span className="field-label">{copy.projectId}</span>
               <input
                 className="glass-input"
                 value={projectId}
@@ -194,30 +208,30 @@ export function MemoryPage() {
               />
             </label>
             <label className="field">
-              <span className="field-label">Scope</span>
+              <span className="field-label">{copy.scope}</span>
               <select className="glass-select" value={scope} onChange={(event) => setScope(event.target.value as MemoryScope | '')}>
-                <option value="">all</option>
-                <option value="project">project</option>
-                <option value="host">host</option>
+                <option value="">{copy.all}</option>
+                <option value="project">{copy.project}</option>
+                <option value="host">{copy.host}</option>
               </select>
             </label>
             <label className="field">
-              <span className="field-label">Kind</span>
+              <span className="field-label">{copy.kind}</span>
               <select className="glass-select" value={kind} onChange={(event) => setKind(event.target.value as MemoryKind | '')}>
-                <option value="">all</option>
-                <option value="preference">preference</option>
-                <option value="constraint">constraint</option>
-                <option value="fact">fact</option>
-                <option value="workflow">workflow</option>
+                <option value="">{copy.all}</option>
+                <option value="preference">{copy.kindOptions.preference}</option>
+                <option value="constraint">{copy.kindOptions.constraint}</option>
+                <option value="fact">{copy.kindOptions.fact}</option>
+                <option value="workflow">{copy.kindOptions.workflow}</option>
               </select>
             </label>
             <label className="field memory-filter-grid__search">
-              <span className="field-label">Search</span>
+              <span className="field-label">{copy.search}</span>
               <input className="glass-input" value={search} onChange={(event) => setSearch(event.target.value)} />
             </label>
             <label className="memory-toggle">
               <input type="checkbox" checked={enabledOnly} onChange={(event) => setEnabledOnly(event.target.checked)} />
-              <span>Enabled Only</span>
+              <span>{copy.enabledOnly}</span>
             </label>
           </div>
 
@@ -228,28 +242,29 @@ export function MemoryPage() {
               onClick={() => setPage((prev) => Math.max(1, prev - 1))}
               disabled={page <= 1 || isLoading}
             >
-              Prev
+              {copy.prev}
             </button>
-            <span className="section-note">Page {page}</span>
+            <span className="section-note">{copy.page} {page}</span>
             <button
               type="button"
               className="tech-btn tech-btn-secondary"
               onClick={() => setPage((prev) => prev + 1)}
               disabled={isLoading || items.length < pageSize}
             >
-              Next
+              {copy.next}
             </button>
           </div>
         </div>
 
         {(editorMode === 'create' || editorMode === 'edit') && (
           <div className="info-block">
-            <h3 className="info-title">{editorMode === 'create' ? 'Create Memory' : 'Edit Memory'}</h3>
+            <h3 className="info-title">{editorMode === 'create' ? copy.createMemory : copy.editMemory}</h3>
             <MemoryItemEditor
               mode={editorMode}
               hostId={hostId}
               initial={editingItem}
               isLoading={isLoading}
+              language={language}
               onCancel={() => {
                 setEditorMode(null);
                 setEditingItem(null);
@@ -262,7 +277,7 @@ export function MemoryPage() {
 
         <div className="memory-list">
           {items.length === 0 ? (
-            <div className="kanban-empty">No memory items matched the current filter.</div>
+            <div className="kanban-empty">{copy.emptyList}</div>
           ) : (
             items.map((item) => (
               <article key={item.id} className="memory-card">
@@ -270,8 +285,8 @@ export function MemoryPage() {
                   <div className="memory-card__chips">
                     <span className="command-chip">{item.scope}</span>
                     <span className="command-chip">{item.kind}</span>
-                    {item.pinned && <span className="command-chip">pinned</span>}
-                    {!item.enabled && <span className="command-chip">disabled</span>}
+                    {item.pinned && <span className="command-chip">{copy.pinned}</span>}
+                    {!item.enabled && <span className="command-chip">{copy.disabled}</span>}
                   </div>
                   <div className="memory-card__tools">
                     <button
@@ -281,7 +296,7 @@ export function MemoryPage() {
                         setEditorMode('edit');
                         setEditingItem(item);
                       }}
-                      title="Edit memory item"
+                      title={copy.editMemoryItem}
                     >
                       <Pencil size={15} />
                     </button>
@@ -289,7 +304,7 @@ export function MemoryPage() {
                       type="button"
                       className="task-card__icon-btn"
                       onClick={() => handleDelete(item)}
-                      title="Delete memory item"
+                      title={copy.deleteMemoryItem}
                     >
                       <Trash2 size={15} />
                     </button>
@@ -297,12 +312,12 @@ export function MemoryPage() {
                 </header>
                 <p className="memory-card__content">{item.content}</p>
                 <div className="memory-card__meta">
-                  <span>host={item.hostId}</span>
-                  {item.projectId && <span>project={item.projectId}</span>}
-                  <span>source={item.source}</span>
-                  <span>confidence={item.confidence.toFixed(2)}</span>
-                  <span>hits={item.hitCount}</span>
-                  <span>updated={formatDate(item.updatedAt)}</span>
+                  <span>{copy.metaHost}={item.hostId}</span>
+                  {item.projectId && <span>{copy.metaProject}={item.projectId}</span>}
+                  <span>{copy.metaSource}={item.source}</span>
+                  <span>{copy.metaConfidence}={item.confidence.toFixed(2)}</span>
+                  <span>{copy.metaHits}={item.hitCount}</span>
+                  <span>{copy.metaUpdated}={formatDate(item.updatedAt)}</span>
                 </div>
               </article>
             ))

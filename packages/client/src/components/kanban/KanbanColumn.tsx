@@ -2,6 +2,7 @@ import { useDroppable } from '@dnd-kit/core';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { KanbanColumn as ColumnType, KanbanTask } from '@opencode-vibe/protocol';
+import type { ConsoleLanguage } from '../../i18n/consoleLanguage';
 import { TaskCard } from './TaskCard';
 
 interface KanbanColumnProps {
@@ -10,9 +11,22 @@ interface KanbanColumnProps {
   onDeleteTask: (taskId: string) => void;
   onTaskClick?: (task: KanbanTask) => void;
   executingTaskIds?: string[];
+  language?: ConsoleLanguage;
 }
 
-export const KanbanColumn = ({ column, tasks, onDeleteTask, onTaskClick, executingTaskIds = [] }: KanbanColumnProps) => {
+const emptyColumnMessage: Record<ConsoleLanguage, string> = {
+  en: 'No tasks',
+  zh: '暂无任务',
+};
+
+export const KanbanColumn = ({
+  column,
+  tasks,
+  onDeleteTask,
+  onTaskClick,
+  executingTaskIds = [],
+  language = 'en',
+}: KanbanColumnProps) => {
   const { setNodeRef, isOver } = useDroppable({
     id: column.id,
   });
@@ -40,7 +54,7 @@ export const KanbanColumn = ({ column, tasks, onDeleteTask, onTaskClick, executi
 
       <div className="flex flex-col gap-2 flex-1">
         {tasks.length === 0 ? (
-          <div className="kanban-empty">暂无任务</div>
+          <div className="kanban-empty">{emptyColumnMessage[language]}</div>
         ) : (
           tasks.map((task) => (
             <SortableTaskCard 
@@ -49,6 +63,7 @@ export const KanbanColumn = ({ column, tasks, onDeleteTask, onTaskClick, executi
               onDelete={onDeleteTask}
               onClick={onTaskClick}
               isExecuting={executingTaskIds.includes(task.id)}
+              language={language}
             />
           ))
         )}
@@ -63,9 +78,10 @@ interface SortableTaskCardProps {
   onDelete: (taskId: string) => void;
   onClick?: (task: KanbanTask) => void;
   isExecuting?: boolean;
+  language: ConsoleLanguage;
 }
 
-const SortableTaskCard = ({ task, onDelete, onClick, isExecuting }: SortableTaskCardProps) => {
+const SortableTaskCard = ({ task, onDelete, onClick, isExecuting, language }: SortableTaskCardProps) => {
   const {
     attributes,
     listeners,
@@ -88,6 +104,7 @@ const SortableTaskCard = ({ task, onDelete, onClick, isExecuting }: SortableTask
         onClick={onClick}
         isDragging={isDragging}
         isExecuting={isExecuting}
+        language={language}
       />
     </div>
   );

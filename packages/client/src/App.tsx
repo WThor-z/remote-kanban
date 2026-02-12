@@ -10,8 +10,10 @@ import {
   Server,
   HardDrive,
   Plug,
+  Languages,
   RefreshCw,
   Layers,
+  FolderGit2,
   ChevronDown,
   LayoutGrid,
   Database,
@@ -19,6 +21,8 @@ import {
 import { KanbanBoard } from './components/kanban/KanbanBoard';
 import { TaskDetailPanel, CreateTaskModal } from './components/task';
 import { MemoryPage } from './components/memory/MemoryPage';
+import { WorkspaceEntryPage } from './components/workspace/WorkspaceEntryPage';
+import { WorkspaceProjectManagementPage } from './components/workspace/WorkspaceProjectManagementPage';
 import type { KanbanTask, AgentType } from '@opencode-vibe/protocol';
 import { useGatewayInfo } from './hooks/useGatewayInfo';
 import { useWorkspaces } from './hooks/useWorkspaces';
@@ -27,6 +31,12 @@ import { getConsoleLexiconSection } from './lexicon/consoleLexicon';
 import { readStoredWorkspaceScope, storeWorkspaceScope } from './utils/workspaceScopeStorage';
 import { filterBoardByVisibleTaskIds } from './utils/kanbanBoardFilter';
 import { WorkspaceScopeProvider } from './context/workspaceScopeContext';
+import {
+  getConsoleLanguageCopy,
+  readStoredConsoleLanguage,
+  storeConsoleLanguage,
+  toggleConsoleLanguage,
+} from './i18n/consoleLanguage';
 
 const SKIN_STORAGE_KEY = 'vk-console-skin';
 
@@ -44,12 +54,16 @@ function App() {
   const [selectedTask, setSelectedTask] = useState<KanbanTask | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [skin, setSkin] = useState<'neural' | 'lab'>(readStoredSkin);
-  const [view, setView] = useState<'board' | 'memory'>('board');
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState(readStoredWorkspaceScope);
+  const [language, setLanguage] = useState(readStoredConsoleLanguage);
+  const [view, setView] = useState<'board' | 'memory' | 'projects'>('board');
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState('');
+  const [workspaceEntrySelectionId, setWorkspaceEntrySelectionId] = useState(readStoredWorkspaceScope);
+  const [hasStaleStoredWorkspace, setHasStaleStoredWorkspace] = useState(false);
   const [isWorkspaceScopeOpen, setIsWorkspaceScopeOpen] = useState(false);
-  const sharedCopy = getConsoleLexiconSection('shared');
-  const appCopy = getConsoleLexiconSection('app');
-  const createTaskModalCopy = getConsoleLexiconSection('createTaskModal');
+  const sharedCopy = getConsoleLexiconSection('shared', language);
+  const appCopy = getConsoleLexiconSection('app', language);
+  const createTaskModalCopy = getConsoleLexiconSection('createTaskModal', language);
+  const languageCopy = getConsoleLanguageCopy(language);
 
   const gatewaySocketUrl = resolveGatewaySocketUrl();
   const apiBaseUrl = resolveApiBaseUrl();
@@ -249,11 +263,63 @@ function App() {
 
   const isLabSkin = skin === 'lab';
 
+  const handleWorkspaceEntryContinue = useCallback(() => {
+    const selectedWorkspace = workspaces.find((workspace) => workspace.id === workspaceEntrySelectionId);
+    if (!selectedWorkspace) {
+      return;
+    }
+
+    setActiveWorkspaceId(selectedWorkspace.id);
+    setWorkspaceEntrySelectionId(selectedWorkspace.id);
+    setSelectedTask(null);
+    selectTask(null);
+    setView('board');
+  }, [selectTask, workspaceEntrySelectionId, workspaces]);
+
+  const handleWorkspaceSwitch = useCallback((nextWorkspaceId: string) => {
+    if (nextWorkspaceId === activeWorkspaceId) {
+      setIsWorkspaceScopeOpen(false);
+      return;
+    }
+
+    const shouldSwitch = window.confirm(languageCopy.app.workspaceSwitchConfirm);
+    if (!shouldSwitch) {
+      return;
+    }
+
+    setActiveWorkspaceId(nextWorkspaceId);
+    setWorkspaceEntrySelectionId(nextWorkspaceId);
+    setSelectedTask(null);
+    selectTask(null);
+    setView('board');
+    setIsWorkspaceScopeOpen(false);
+  }, [activeWorkspaceId, languageCopy.app.workspaceSwitchConfirm, selectTask]);
+
   useEffect(() => {
     if (activeWorkspaceId && !workspaces.some((workspace) => workspace.id === activeWorkspaceId)) {
       setActiveWorkspaceId('');
+      setWorkspaceEntrySelectionId('');
+      setHasStaleStoredWorkspace(true);
     }
   }, [activeWorkspaceId, workspaces]);
+
+  useEffect(() => {
+    if (!workspaceEntrySelectionId) {
+      return;
+    }
+
+    if (workspacesLoading) {
+      return;
+    }
+
+    if (!workspaces.some((workspace) => workspace.id === workspaceEntrySelectionId)) {
+      setWorkspaceEntrySelectionId('');
+      setHasStaleStoredWorkspace(true);
+      return;
+    }
+
+    setHasStaleStoredWorkspace(false);
+  }, [workspaceEntrySelectionId, workspaces, workspacesLoading]);
 
   useEffect(() => {
     if (!activeWorkspaceId) {
@@ -283,6 +349,32 @@ function App() {
       window.localStorage.setItem(SKIN_STORAGE_KEY, skin);
     }
   }, [skin]);
+
+  useEffect(() => {
+    storeConsoleLanguage(language);
+  }, [language]);
+
+  const isWorkspaceConfirmed = Boolean(
+    activeWorkspaceId && workspaces.some((workspace) => workspace.id === activeWorkspaceId),
+  );
+
+  if (!isWorkspaceConfirmed) {
+    return (
+      <WorkspaceEntryPage
+        selectedWorkspaceId={workspaceEntrySelectionId}
+        hasStaleStoredWorkspace={!isWorkspaceConfirmed && hasStaleStoredWorkspace}
+        onSelectionChange={(workspaceId) => {
+          setWorkspaceEntrySelectionId(workspaceId);
+          if (workspaceId) {
+            setHasStaleStoredWorkspace(false);
+          }
+        }}
+        onContinue={handleWorkspaceEntryContinue}
+        language={language}
+        onLanguageToggle={() => setLanguage((current) => toggleConsoleLanguage(current))}
+      />
+    );
+  }
 
   return (
     <WorkspaceScopeProvider value={{ activeWorkspaceId, setActiveWorkspaceId }}>
@@ -324,33 +416,19 @@ function App() {
               >
                 <span className="flex items-center gap-2 text-slate-200">
                   <Layers size={14} className="text-cyan-300" />
-                  {activeWorkspace ? activeWorkspace.name : createTaskModalCopy.placeholders.workspaceAny}
-                  {workspacesLoading && <span className="text-xs text-slate-500">(loading...)</span>}
+                  {activeWorkspace ? activeWorkspace.name : createTaskModalCopy.placeholders.workspace}
+                  {workspacesLoading && <span className="text-xs text-slate-500">({languageCopy.app.loading})</span>}
                 </span>
                 <ChevronDown size={14} className={`text-slate-400 transition-transform ${isWorkspaceScopeOpen ? 'rotate-180' : ''}`} />
               </button>
               {isWorkspaceScopeOpen && (
                 <div className="dropdown-panel dropdown-panel--scroll">
-                  <button
-                    type="button"
-                    className={`dropdown-item ${!activeWorkspaceId ? 'dropdown-item--active' : ''}`}
-                    onClick={() => {
-                      setActiveWorkspaceId('');
-                      setIsWorkspaceScopeOpen(false);
-                    }}
-                  >
-                    <div className="text-slate-200">{createTaskModalCopy.placeholders.workspaceAny}</div>
-                    <div className="dropdown-note">{createTaskModalCopy.placeholders.workspaceAnyHint}</div>
-                  </button>
                   {workspaces.map((workspace) => (
                     <button
                       key={workspace.id}
                       type="button"
                       className={`dropdown-item ${activeWorkspaceId === workspace.id ? 'dropdown-item--active' : ''}`}
-                      onClick={() => {
-                        setActiveWorkspaceId(workspace.id);
-                        setIsWorkspaceScopeOpen(false);
-                      }}
+                      onClick={() => handleWorkspaceSwitch(workspace.id)}
                     >
                       <div className="text-cyan-200">{workspace.name}</div>
                       <div className="dropdown-note">{workspace.rootPath}</div>
@@ -364,20 +442,31 @@ function App() {
               onClick={() => setView('board')}
               className="tech-btn tech-btn-secondary"
             >
-              <LayoutGrid size={14} /> Board
+              <LayoutGrid size={14} /> {languageCopy.app.board}
             </button>
             <button
               type="button"
               onClick={() => setView('memory')}
               className="tech-btn tech-btn-secondary"
             >
-              <Database size={14} /> Memory
+              <Database size={14} /> {languageCopy.app.memory}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setView('projects');
+                setSelectedTask(null);
+                selectTask(null);
+              }}
+              className="tech-btn tech-btn-secondary"
+            >
+              <FolderGit2 size={14} /> {languageCopy.app.manageProjects}
             </button>
             <button
               type="button"
               onClick={() => setIsCreateModalOpen(true)}
               className="tech-btn tech-btn-primary"
-              title="Create new task (Press 'c')"
+              title={languageCopy.app.newTaskHint}
             >
               <Plus size={16} /> {appCopy.actions.createTask}
             </button>
@@ -395,6 +484,14 @@ function App() {
             >
               {isLabSkin ? sharedCopy.skin.backToNeural : sharedCopy.skin.switchToLab}
             </button>
+            <button
+              type="button"
+              className="tech-btn tech-btn-secondary"
+              onClick={() => setLanguage((current) => toggleConsoleLanguage(current))}
+              aria-label={languageCopy.language.switchButtonAria}
+            >
+              <Languages size={14} /> {languageCopy.language.switchButtonLabel}
+            </button>
           </div>
         </section>
 
@@ -410,25 +507,25 @@ function App() {
 
           <div className="gateway-grid">
             <div className="gateway-card">
-              <div className="gateway-label">Socket</div>
+              <div className="gateway-label">{languageCopy.app.gatewayLabels.socket}</div>
               <div className="gateway-value gateway-value--mono">{gatewaySocketUrl}</div>
             </div>
 
             <div className="gateway-card">
-              <div className="gateway-label">REST API</div>
+              <div className="gateway-label">{languageCopy.app.gatewayLabels.restApi}</div>
               <div className="gateway-value gateway-value--mono">{apiBaseUrl}</div>
             </div>
 
             <div className="gateway-card">
               <div className="gateway-label">
-                <Plug size={12} /> Worker
+                <Plug size={12} /> {languageCopy.app.gatewayLabels.worker}
               </div>
               <div className="gateway-value gateway-value--mono">{gatewayInfo?.workerUrl || 'unknown'}</div>
             </div>
 
             <div className="gateway-card">
               <div className="gateway-label">
-                <HardDrive size={12} /> Data Dir
+                <HardDrive size={12} /> {languageCopy.app.gatewayLabels.dataDir}
               </div>
               <div className="gateway-value gateway-value--mono">{gatewayInfo?.dataDir || 'unknown'}</div>
             </div>
@@ -452,10 +549,13 @@ function App() {
               onDeleteTask={deleteTask}
               onTaskClick={handleTaskClick}
               executingTaskIds={executingTaskIds}
+              language={language}
             />
           </section>
+        ) : view === 'memory' ? (
+          <MemoryPage language={language} />
         ) : (
-          <MemoryPage />
+          <WorkspaceProjectManagementPage workspaceId={activeWorkspaceId} language={language} />
         )}
 
       {view === 'board' && selectedTask && (
@@ -477,6 +577,7 @@ function App() {
           onSendMessage={handleSendMessage}
           onSendInput={sendInputToTask}
           onCleanupWorktree={handleCleanupWorktree}
+          language={language}
         />
       )}
 
@@ -488,6 +589,7 @@ function App() {
             isLoading={isTaskApiLoading}
             error={taskApiError}
             defaultWorkspaceId={activeWorkspaceId || undefined}
+            language={language}
           />
         </div>
       </div>

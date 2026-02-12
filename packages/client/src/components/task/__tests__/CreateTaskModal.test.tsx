@@ -49,17 +49,6 @@ describe('CreateTaskModal workspace filtering', () => {
           createdAt: '2026-02-09T00:00:00Z',
           updatedAt: '2026-02-09T00:00:00Z',
         },
-        {
-          id: 'project-2',
-          gatewayId: 'gateway-2',
-          workspaceId: 'ws-2',
-          name: 'Project Beta',
-          localPath: '/tmp/project-beta',
-          remoteUrl: null,
-          defaultBranch: 'main',
-          createdAt: '2026-02-09T00:00:00Z',
-          updatedAt: '2026-02-09T00:00:00Z',
-        },
       ],
       isLoading: false,
       error: null,
@@ -75,17 +64,8 @@ describe('CreateTaskModal workspace filtering', () => {
           id: 'ws-1',
           name: 'Workspace Alpha',
           slug: 'workspace-alpha',
+          hostId: 'host-1',
           rootPath: '/tmp/workspace-alpha',
-          defaultProjectId: null,
-          createdAt: '2026-02-09T00:00:00Z',
-          updatedAt: '2026-02-09T00:00:00Z',
-          archivedAt: null,
-        },
-        {
-          id: 'ws-2',
-          name: 'Workspace Beta',
-          slug: 'workspace-beta',
-          rootPath: '/tmp/workspace-beta',
           defaultProjectId: null,
           createdAt: '2026-02-09T00:00:00Z',
           updatedAt: '2026-02-09T00:00:00Z',
@@ -95,52 +75,46 @@ describe('CreateTaskModal workspace filtering', () => {
       isLoading: false,
       error: null,
       refresh: vi.fn(async () => {}),
+      createWorkspace: vi.fn(async () => null),
+      deleteWorkspace: vi.fn(async () => false),
       hasWorkspaces: true,
     });
   });
 
-  it('shows workspace scope selector', () => {
-    render(
-      <CreateTaskModal
-        isOpen
-        onClose={onClose}
-        onCreate={onCreate}
-      />,
-    );
+  it('shows selected workspace scope selector', () => {
+    render(<CreateTaskModal isOpen onClose={onClose} onCreate={onCreate} defaultWorkspaceId="ws-1" />);
 
-    expect(screen.getByText('Workspace Scope')).toBeInTheDocument();
+    expect(screen.getByLabelText('Selected workspace scope')).toBeInTheDocument();
+    expect(screen.getByText('Workspace Alpha')).toBeInTheDocument();
   });
 
-  it('passes selected workspace id into useProjects filter', async () => {
-    render(
-      <CreateTaskModal
-        isOpen
-        onClose={onClose}
-        onCreate={onCreate}
-      />,
-    );
-
-    const openWorkspaceSelector = screen.getByRole('button', {
-      name: /select workspace scope/i,
-    });
-
-    fireEvent.click(openWorkspaceSelector);
-    fireEvent.click(screen.getByRole('button', { name: /workspace beta/i }));
+  it('always passes selected workspace id into useProjects filter', async () => {
+    render(<CreateTaskModal isOpen onClose={onClose} onCreate={onCreate} defaultWorkspaceId="ws-1" />);
 
     await waitFor(() => {
-      expect(useProjects).toHaveBeenLastCalledWith({ workspaceId: 'ws-2' });
+      expect(useProjects).toHaveBeenLastCalledWith({ workspaceId: 'ws-1' });
     });
   });
 
-  it('uses default workspace id for initial project filtering', async () => {
-    render(
-      <CreateTaskModal
-        isOpen
-        onClose={onClose}
-        onCreate={onCreate}
-        defaultWorkspaceId="ws-1"
-      />,
-    );
+  it('does not render all workspace fallback option', () => {
+    render(<CreateTaskModal isOpen onClose={onClose} onCreate={onCreate} defaultWorkspaceId="ws-1" />);
+
+    expect(screen.queryByRole('button', { name: /all workspaces/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /show projects from all workspaces/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps workspace filter scoped even when project list is empty', async () => {
+    (useProjects as Mock).mockReturnValue({
+      projects: [],
+      isLoading: false,
+      error: null,
+      refresh: vi.fn(async () => {}),
+      getProject: vi.fn(),
+      getProjectsForGateway: vi.fn(),
+      hasProjects: false,
+    });
+
+    render(<CreateTaskModal isOpen onClose={onClose} onCreate={onCreate} defaultWorkspaceId="ws-1" />);
 
     await waitFor(() => {
       expect(useProjects).toHaveBeenLastCalledWith({ workspaceId: 'ws-1' });
@@ -149,17 +123,21 @@ describe('CreateTaskModal workspace filtering', () => {
 
   it('falls back to workspace scope context when defaultWorkspaceId is absent', async () => {
     render(
-      <WorkspaceScopeProvider value={{ activeWorkspaceId: 'ws-2', setActiveWorkspaceId: vi.fn() }}>
-        <CreateTaskModal
-          isOpen
-          onClose={onClose}
-          onCreate={onCreate}
-        />
+      <WorkspaceScopeProvider value={{ activeWorkspaceId: 'ws-1', setActiveWorkspaceId: vi.fn() }}>
+        <CreateTaskModal isOpen onClose={onClose} onCreate={onCreate} />
       </WorkspaceScopeProvider>,
     );
 
     await waitFor(() => {
-      expect(useProjects).toHaveBeenLastCalledWith({ workspaceId: 'ws-2' });
+      expect(useProjects).toHaveBeenLastCalledWith({ workspaceId: 'ws-1' });
     });
+  });
+
+  it('keeps create action disabled until project is selected', () => {
+    render(<CreateTaskModal isOpen onClose={onClose} onCreate={onCreate} defaultWorkspaceId="ws-1" />);
+
+    fireEvent.change(screen.getByLabelText(/directive title/i), { target: { value: 'Task A' } });
+
+    expect(screen.getByRole('button', { name: /create capsule/i })).toBeDisabled();
   });
 });

@@ -1,10 +1,15 @@
 import { useEffect, useState } from 'react';
 import type { MemorySettings } from '../../hooks/useMemoryApi';
+import {
+  getConsoleLanguageCopy,
+  type ConsoleLanguage,
+} from '../../i18n/consoleLanguage';
 
 interface MemorySettingsPanelProps {
   settings: MemorySettings | null;
   isLoading: boolean;
   onSave: (patch: Partial<MemorySettings>) => Promise<void>;
+  language?: ConsoleLanguage;
 }
 
 const asNumber = (value: string, fallback: number): number => {
@@ -15,7 +20,13 @@ const asNumber = (value: string, fallback: number): number => {
   return parsed;
 };
 
-export function MemorySettingsPanel({ settings, isLoading, onSave }: MemorySettingsPanelProps) {
+export function MemorySettingsPanel({
+  settings,
+  isLoading,
+  onSave,
+  language = 'en',
+}: MemorySettingsPanelProps) {
+  const copy = getConsoleLanguageCopy(language).memory.settingsPanel;
   const [draft, setDraft] = useState<MemorySettings | null>(settings);
 
   useEffect(() => {
@@ -25,7 +36,7 @@ export function MemorySettingsPanel({ settings, isLoading, onSave }: MemorySetti
   if (!draft) {
     return (
       <div className="info-block">
-        <p className="section-note">No memory settings loaded.</p>
+        <p className="section-note">{copy.noSettings}</p>
       </div>
     );
   }
@@ -52,7 +63,7 @@ export function MemorySettingsPanel({ settings, isLoading, onSave }: MemorySetti
             checked={draft.enabled}
             onChange={(event) => setDraft((prev) => (prev ? { ...prev, enabled: event.target.checked } : prev))}
           />
-          <span>Enabled</span>
+          <span>{copy.enabled}</span>
         </label>
         <label className="memory-toggle">
           <input
@@ -62,7 +73,7 @@ export function MemorySettingsPanel({ settings, isLoading, onSave }: MemorySetti
               setDraft((prev) => (prev ? { ...prev, gatewayStoreEnabled: event.target.checked } : prev))
             }
           />
-          <span>Gateway Store</span>
+          <span>{copy.gatewayStore}</span>
         </label>
         <label className="memory-toggle">
           <input
@@ -72,7 +83,7 @@ export function MemorySettingsPanel({ settings, isLoading, onSave }: MemorySetti
               setDraft((prev) => (prev ? { ...prev, rustStoreEnabled: event.target.checked } : prev))
             }
           />
-          <span>Rust Store</span>
+          <span>{copy.rustStore}</span>
         </label>
         <label className="memory-toggle">
           <input
@@ -80,7 +91,7 @@ export function MemorySettingsPanel({ settings, isLoading, onSave }: MemorySetti
             checked={draft.autoWrite}
             onChange={(event) => setDraft((prev) => (prev ? { ...prev, autoWrite: event.target.checked } : prev))}
           />
-          <span>Auto Write</span>
+          <span>{copy.autoWrite}</span>
         </label>
         <label className="memory-toggle">
           <input
@@ -90,7 +101,7 @@ export function MemorySettingsPanel({ settings, isLoading, onSave }: MemorySetti
               setDraft((prev) => (prev ? { ...prev, promptInjection: event.target.checked } : prev))
             }
           />
-          <span>Prompt Injection</span>
+          <span>{copy.promptInjection}</span>
         </label>
         <label className="memory-toggle">
           <input
@@ -100,13 +111,13 @@ export function MemorySettingsPanel({ settings, isLoading, onSave }: MemorySetti
               setDraft((prev) => (prev ? { ...prev, llmExtractEnabled: event.target.checked } : prev))
             }
           />
-          <span>LLM Extract Fallback</span>
+          <span>{copy.llmExtractFallback}</span>
         </label>
       </div>
 
       <div className="memory-settings__numbers">
         <label className="field">
-          <span className="field-label">Token Budget</span>
+          <span className="field-label">{copy.tokenBudget}</span>
           <input
             className="glass-input"
             type="number"
@@ -121,7 +132,7 @@ export function MemorySettingsPanel({ settings, isLoading, onSave }: MemorySetti
           />
         </label>
         <label className="field">
-          <span className="field-label">Retrieval Top K</span>
+          <span className="field-label">{copy.retrievalTopK}</span>
           <input
             className="glass-input"
             type="number"
@@ -139,7 +150,7 @@ export function MemorySettingsPanel({ settings, isLoading, onSave }: MemorySetti
 
       <div className="memory-settings__actions">
         <button type="button" className="tech-btn tech-btn-primary" onClick={submit} disabled={isLoading}>
-          Save Settings
+          {copy.saveSettings}
         </button>
       </div>
     </div>

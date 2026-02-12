@@ -98,6 +98,6 @@ describe('KanbanBoard', () => {
       />
     );
 
-    expect(screen.getAllByText('暂无任务')).toHaveLength(3);
+    expect(screen.getAllByText('No tasks')).toHaveLength(3);
   });
 });

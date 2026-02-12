@@ -9,7 +9,7 @@ describe('NeuralUiDemo', () => {
     expect(screen.getByTestId('neural-ui-demo')).toBeInTheDocument();
     expect(screen.getByText('Neural UI Demo')).toBeInTheDocument();
     expect(screen.getByText('Gateway Diagnostics')).toBeInTheDocument();
-    expect(screen.getByText('Directive 指令流')).toBeInTheDocument();
+    expect(screen.getByText('Directive')).toBeInTheDocument();
   });
 
   it('adds a mock task when pressing inject button', () => {

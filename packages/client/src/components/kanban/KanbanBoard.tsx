@@ -16,6 +16,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import type { KanbanBoardState, KanbanTaskStatus, KanbanTask } from '@opencode-vibe/protocol';
+import type { ConsoleLanguage } from '../../i18n/consoleLanguage';
 import { KanbanColumn } from './KanbanColumn';
 import { TaskCard } from './TaskCard';
 
@@ -25,9 +26,30 @@ interface KanbanBoardProps {
   onDeleteTask: (taskId: string) => void;
   onTaskClick?: (task: KanbanTask) => void;
   executingTaskIds?: string[];
+  language?: ConsoleLanguage;
 }
 
-export const KanbanBoard = ({ board, onMoveTask, onDeleteTask, onTaskClick, executingTaskIds = [] }: KanbanBoardProps) => {
+const columnTitleByLanguage: Record<ConsoleLanguage, Record<KanbanTaskStatus, string>> = {
+  en: {
+    todo: 'To Do',
+    doing: 'Doing',
+    done: 'Done',
+  },
+  zh: {
+    todo: '待办',
+    doing: '进行中',
+    done: '已完成',
+  },
+};
+
+export const KanbanBoard = ({
+  board,
+  onMoveTask,
+  onDeleteTask,
+  onTaskClick,
+  executingTaskIds = [],
+  language = 'en',
+}: KanbanBoardProps) => {
   const [activeId, setActiveId] = useState<string | null>(null);
 
   const sensors = useSensors(
@@ -87,6 +109,10 @@ export const KanbanBoard = ({ board, onMoveTask, onDeleteTask, onTaskClick, exec
         {board.columnOrder.map((columnId) => {
           const column = board.columns[columnId];
           const tasks = column.taskIds.map((taskId) => board.tasks[taskId]).filter(Boolean);
+          const localizedColumn = {
+            ...column,
+            title: columnTitleByLanguage[language][column.id],
+          };
 
           return (
             <SortableContext
@@ -95,11 +121,12 @@ export const KanbanBoard = ({ board, onMoveTask, onDeleteTask, onTaskClick, exec
               strategy={verticalListSortingStrategy}
             >
 <KanbanColumn
-                column={column}
+                column={localizedColumn}
                 tasks={tasks}
                 onDeleteTask={onDeleteTask}
                 onTaskClick={onTaskClick}
                 executingTaskIds={executingTaskIds}
+                language={language}
               />
             </SortableContext>
           );
@@ -107,7 +134,7 @@ export const KanbanBoard = ({ board, onMoveTask, onDeleteTask, onTaskClick, exec
       </div>
 
       <DragOverlay>
-        {activeTask && <TaskCard task={activeTask} isDragging />}
+        {activeTask && <TaskCard task={activeTask} isDragging language={language} />}
       </DragOverlay>
     </DndContext>
   );

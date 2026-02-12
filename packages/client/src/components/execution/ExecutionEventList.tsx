@@ -1,32 +1,78 @@
 import { Terminal, Cpu, FileCode, AlertCircle, CheckCircle, MessageSquare } from 'lucide-react';
 import type { ExecutionEvent, AgentEvent } from '@opencode-vibe/protocol';
+import type { ConsoleLanguage } from '../../i18n/consoleLanguage';
 
 interface Props {
   events: ExecutionEvent[];
   className?: string;
+  language?: ConsoleLanguage;
 }
 
-export const ExecutionEventList: React.FC<Props> = ({ events, className }) => (
+const copyByLanguage = {
+  en: {
+    statusPrefix: 'STATUS',
+    sessionStarted: 'Execution session started on branch',
+    sessionEnded: 'Session ended with status',
+    thinking: 'Thinking',
+    taskCompletedSuccess: 'Task Completed Successfully',
+    taskCompletedFailed: 'Task Completed Failed',
+  },
+  zh: {
+    statusPrefix: '状态',
+    sessionStarted: '执行会话已在分支启动',
+    sessionEnded: '会话结束状态',
+    thinking: '思考',
+    taskCompletedSuccess: '任务执行成功',
+    taskCompletedFailed: '任务执行失败',
+  },
+} as const;
+
+const runtimeStatusLabelByLanguage = {
+  en: {
+    idle: 'idle',
+    starting: 'starting',
+    running: 'running',
+    paused: 'paused',
+    completed: 'completed',
+    failed: 'failed',
+    aborted: 'aborted',
+  },
+  zh: {
+    idle: '待执行',
+    starting: '启动中',
+    running: '执行中',
+    paused: '已暂停',
+    completed: '已完成',
+    failed: '失败',
+    aborted: '已中止',
+  },
+} as const;
+
+export const ExecutionEventList: React.FC<Props> = ({ events, className, language = 'en' }) => (
   <div className={`space-y-3 ${className || ''}`}>
     {events.map((event) => (
-      <EventItem key={event.id} event={event} />
+      <EventItem key={event.id} event={event} language={language} />
     ))}
   </div>
 );
 
-const EventItem: React.FC<{ event: ExecutionEvent }> = ({ event }) => {
+const EventItem: React.FC<{ event: ExecutionEvent; language: ConsoleLanguage }> = ({ event, language }) => {
+  const copy = copyByLanguage[language];
   if (event.event_type === 'agent_event') {
     if (!event.event) {
       console.warn('Malformed agent_event received:', event);
       return null;
     }
-    return <AgentEventItem event={event.event} timestamp={event.timestamp} />;
+    return <AgentEventItem event={event.event} timestamp={event.timestamp} language={language} />;
   }
   if (event.event_type === 'status_changed') {
+    const mappedStatus =
+      runtimeStatusLabelByLanguage[language][event.new_status as keyof typeof runtimeStatusLabelByLanguage.en] ||
+      event.new_status;
     return (
       <div className="flex items-center text-xs text-slate-500 py-1 border-t border-b border-slate-800/50 bg-slate-900/50">
         <span className="mr-3 font-mono opacity-50">{formatTime(event.timestamp)}</span>
-        <span className="text-blue-400 font-semibold uppercase tracking-wider">STATUS: {event.new_status}</span>
+        <span className="text-blue-400 font-semibold uppercase tracking-wider">{copy.statusPrefix}: {mappedStatus}</span>
       </div>
     );
   }
@@ -34,14 +80,14 @@ const EventItem: React.FC<{ event: ExecutionEvent }> = ({ event }) => {
     return (
       <div className="text-xs text-blue-400 py-2 flex items-center gap-2">
         <Terminal className="w-3 h-3" />
-        Execution session started on branch <span className="font-bold">{event.branch}</span>
+        {copy.sessionStarted} <span className="font-bold">{event.branch}</span>
       </div>
     );
   }
   if (event.event_type === 'session_ended') {
     return (
       <div className="text-xs text-slate-400 py-2">
-        Session ended with status <span className="font-semibold">{event.status}</span>
+        {copy.sessionEnded} <span className="font-semibold">{event.status}</span>
       </div>
     );
   }
@@ -55,7 +101,12 @@ const EventItem: React.FC<{ event: ExecutionEvent }> = ({ event }) => {
   return null;
 };
 
-const AgentEventItem: React.FC<{ event: AgentEvent; timestamp: string }> = ({ event, timestamp }) => {
+const AgentEventItem: React.FC<{ event: AgentEvent; timestamp: string; language: ConsoleLanguage }> = ({
+  event,
+  timestamp,
+  language,
+}) => {
+  const copy = copyByLanguage[language];
   const time = formatTime(timestamp);
 
   switch (event.type) {
@@ -65,7 +116,7 @@ const AgentEventItem: React.FC<{ event: AgentEvent; timestamp: string }> = ({ ev
           <span className="text-xs text-slate-600 mr-3 mt-0.5 select-none">{time}</span>
           <div className="flex-1 min-w-0">
             <div className="flex items-center mb-1 font-semibold text-xs uppercase tracking-wide opacity-70">
-              <Cpu className="w-3 h-3 mr-1.5" /> Thinking
+              <Cpu className="w-3 h-3 mr-1.5" /> {copy.thinking}
             </div>
             <div className="whitespace-pre-wrap break-words opacity-90">{event.content}</div>
           </div>
@@ -117,7 +168,7 @@ const AgentEventItem: React.FC<{ event: AgentEvent; timestamp: string }> = ({ ev
         <div className={`flex items-center py-3 border-t border-slate-700 mt-4 font-bold ${event.success ? 'text-green-500' : 'text-red-500'}`}>
           <span className="text-xs text-slate-600 mr-3 font-normal">{time}</span>
           <CheckCircle className="w-5 h-5 mr-2" />
-          <span>Task Completed {event.success ? 'Successfully' : 'Failed'}</span>
+          <span>{event.success ? copy.taskCompletedSuccess : copy.taskCompletedFailed}</span>
         </div>
       );
     case 'raw_output':

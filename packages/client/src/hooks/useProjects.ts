@@ -56,7 +56,50 @@ export interface UseProjectsResult {
   getProjectsForGateway: (gatewayId: string) => Project[];
   /** Check if any project is available */
   hasProjects: boolean;
+  /** Discover git repositories under a workspace root */
+  discoverWorkspaceProjects: (workspaceId: string) => Promise<DiscoveredWorkspaceProject[]>;
+  /** Register a project under the selected workspace */
+  createWorkspaceProject: (workspaceId: string, input: CreateWorkspaceProjectInput) => Promise<Project | null>;
 }
+
+export interface CreateWorkspaceProjectInput {
+  name: string;
+  localPath: string;
+  remoteUrl?: string;
+  defaultBranch?: string;
+  worktreeDir?: string;
+}
+
+export interface DiscoveredWorkspaceProject {
+  name: string;
+  localPath: string;
+  source: string;
+  registeredProjectId: string | null;
+}
+
+interface WorkspaceProjectPayload {
+  id: string;
+  gatewayId: string;
+  workspaceId: string;
+  name: string;
+  localPath: string;
+  remoteUrl: string | null;
+  defaultBranch: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+const parseErrorMessage = async (response: Response, fallback: string): Promise<string> => {
+  try {
+    const payload = await response.json();
+    if (typeof payload?.error === 'string') {
+      return payload.error;
+    }
+  } catch {
+    // Ignore non-JSON errors.
+  }
+  return fallback;
+};
 
 export const useProjects = ({ workspaceId }: UseProjectsOptions = {}): UseProjectsResult => {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -106,6 +149,85 @@ export const useProjects = ({ workspaceId }: UseProjectsOptions = {}): UseProjec
 
   const hasProjects = projects.length > 0;
 
+  const discoverWorkspaceProjects = useCallback(async (workspaceId: string): Promise<DiscoveredWorkspaceProject[]> => {
+    if (!workspaceId) {
+      setError('Workspace is required to discover projects');
+      return [];
+    }
+
+    setIsLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(`${baseUrl}/api/workspaces/${workspaceId}/projects/discover`);
+      if (!response.ok) {
+        const message = await parseErrorMessage(response, `Failed to discover projects (${response.status})`);
+        throw new Error(message);
+      }
+
+      const payload = await response.json();
+      return Array.isArray(payload) ? payload : [];
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to discover projects');
+      return [];
+    } finally {
+      setIsLoading(false);
+    }
+  }, [baseUrl]);
+
+  const createWorkspaceProject = useCallback(async (
+    workspaceId: string,
+    input: CreateWorkspaceProjectInput,
+  ): Promise<Project | null> => {
+    if (!workspaceId) {
+      setError('Workspace is required to create a project');
+      return null;
+    }
+
+    setIsLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(`${baseUrl}/api/workspaces/${workspaceId}/projects`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: input.name,
+          localPath: input.localPath,
+          remoteUrl: input.remoteUrl,
+          defaultBranch: input.defaultBranch,
+          worktreeDir: input.worktreeDir,
+        }),
+      });
+
+      if (!response.ok) {
+        const message = await parseErrorMessage(response, `Failed to create project (${response.status})`);
+        throw new Error(message);
+      }
+
+      const payload = (await response.json()) as WorkspaceProjectPayload;
+      const timestamp = new Date().toISOString();
+      const created: Project = {
+        id: payload.id,
+        gatewayId: payload.gatewayId,
+        workspaceId: payload.workspaceId,
+        name: payload.name,
+        localPath: payload.localPath,
+        remoteUrl: payload.remoteUrl,
+        defaultBranch: payload.defaultBranch,
+        createdAt: payload.createdAt ?? timestamp,
+        updatedAt: payload.updatedAt ?? timestamp,
+      };
+      setProjects((prev) => [created, ...prev.filter((project) => project.id !== created.id)]);
+      return created;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create project');
+      return null;
+    } finally {
+      setIsLoading(false);
+    }
+  }, [baseUrl]);
+
   return {
     projects,
     isLoading,
@@ -114,5 +236,7 @@ export const useProjects = ({ workspaceId }: UseProjectsOptions = {}): UseProjec
     getProject,
     getProjectsForGateway,
     hasProjects,
+    discoverWorkspaceProjects,
+    createWorkspaceProject,
   };
 };

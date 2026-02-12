@@ -4,7 +4,8 @@ import type { KanbanTask, TaskSessionHistory, AgentSessionStatus } from '@openco
 import { ExecutionLogPanel } from '../execution/ExecutionLogPanel';
 import { RunHistoryPanel } from '../run/RunHistoryPanel';
 import { useTaskRuns, type ChatMessage } from '../../hooks/useTaskRuns';
-import { CONSOLE_LEXICON } from '../../lexicon/consoleLexicon';
+import { getConsoleLexiconSection } from '../../lexicon/consoleLexicon';
+import type { ConsoleLanguage } from '../../i18n/consoleLanguage';
 
 interface ExecutionInfo {
   sessionId: string;
@@ -26,19 +27,8 @@ interface TaskDetailPanelProps {
   onSendMessage: (taskId: string, content: string) => void;
   onCleanupWorktree?: (taskId: string) => void;
   onSendInput?: (taskId: string, content: string) => Promise<boolean>;
+  language?: ConsoleLanguage;
 }
-
-const copy = CONSOLE_LEXICON.taskDetailPanel;
-
-const statusConfig: Record<AgentSessionStatus, { icon: React.ReactNode; label: string; color: string }> = {
-  idle: { icon: <Clock size={16} />, label: copy.statusLabels.idle, color: 'text-slate-400' },
-  starting: { icon: <Loader2 size={16} className="animate-spin" />, label: copy.statusLabels.starting, color: 'text-amber-400' },
-  running: { icon: <Loader2 size={16} className="animate-spin" />, label: copy.statusLabels.running, color: 'text-indigo-400' },
-  paused: { icon: <Clock size={16} />, label: copy.statusLabels.paused, color: 'text-amber-400' },
-  completed: { icon: <CheckCircle size={16} />, label: copy.statusLabels.completed, color: 'text-emerald-400' },
-  failed: { icon: <XCircle size={16} />, label: copy.statusLabels.failed, color: 'text-rose-400' },
-  aborted: { icon: <XCircle size={16} />, label: copy.statusLabels.aborted, color: 'text-slate-400' },
-};
 
 export function TaskDetailPanel({
   task,
@@ -53,7 +43,30 @@ export function TaskDetailPanel({
   onSendMessage,
   onCleanupWorktree,
   onSendInput,
+  language = 'en',
 }: TaskDetailPanelProps) {
+  const copy = getConsoleLexiconSection('taskDetailPanel', language);
+  const statusConfig: Record<AgentSessionStatus, { icon: React.ReactNode; label: string; color: string }> = {
+    idle: { icon: <Clock size={16} />, label: copy.statusLabels.idle, color: 'text-slate-400' },
+    starting: {
+      icon: <Loader2 size={16} className="animate-spin" />,
+      label: copy.statusLabels.starting,
+      color: 'text-amber-400',
+    },
+    running: {
+      icon: <Loader2 size={16} className="animate-spin" />,
+      label: copy.statusLabels.running,
+      color: 'text-indigo-400',
+    },
+    paused: { icon: <Clock size={16} />, label: copy.statusLabels.paused, color: 'text-amber-400' },
+    completed: {
+      icon: <CheckCircle size={16} />,
+      label: copy.statusLabels.completed,
+      color: 'text-emerald-400',
+    },
+    failed: { icon: <XCircle size={16} />, label: copy.statusLabels.failed, color: 'text-rose-400' },
+    aborted: { icon: <XCircle size={16} />, label: copy.statusLabels.aborted, color: 'text-slate-400' },
+  };
   const [inputValue, setInputValue] = useState('');
   const [activeTab, setActiveTab] = useState<'chat' | 'logs' | 'runs'>('chat');
   const [persistedMessages, setPersistedMessages] = useState<ChatMessage[]>([]);
@@ -125,7 +138,7 @@ export function TaskDetailPanel({
                 type="button"
                 onClick={onClose}
                 className="tech-btn tech-btn-secondary px-2.5 py-1.5"
-                aria-label="关闭"
+                aria-label={copy.labels.close}
               >
                 <X size={16} />
               </button>
@@ -139,21 +152,21 @@ export function TaskDetailPanel({
               className={`detail-tab ${activeTab === 'chat' ? 'detail-tab--active' : ''}`}
           >
             <MessageSquare size={16} />
-            Chat
+            {copy.tabs.chat}
           </button>
           <button
             onClick={() => setActiveTab('logs')}
               className={`detail-tab ${activeTab === 'logs' ? 'detail-tab--active' : ''}`}
           >
             <Terminal size={16} />
-            Logs
+            {copy.tabs.logs}
           </button>
           <button
             onClick={() => setActiveTab('runs')}
               className={`detail-tab ${activeTab === 'runs' ? 'detail-tab--active' : ''}`}
           >
             <History size={16} />
-            Runs
+            {copy.tabs.runs}
           </button>
           </div>
 
@@ -243,12 +256,13 @@ export function TaskDetailPanel({
               taskId={task.id} 
               onSendInput={onSendInput}
               isRunning={isRunning}
+              language={language}
             />
           </div>
 
           {/* Runs View */}
             <div className={`absolute inset-0 p-3 ${activeTab === 'runs' ? 'z-10' : 'z-0 hidden'}`}>
-            <RunHistoryPanel taskId={task.id} />
+            <RunHistoryPanel taskId={task.id} language={language} />
           </div>
           </div>
 

@@ -32,7 +32,7 @@ describe('TaskCard', () => {
     const onDelete = vi.fn();
     render(<TaskCard task={mockTask} onDelete={onDelete} />);
     
-    const deleteButton = screen.getByRole('button', { name: /删除/i });
+    const deleteButton = screen.getByRole('button', { name: /delete task/i });
     fireEvent.click(deleteButton);
     
     expect(onDelete).toHaveBeenCalledWith('task-1');

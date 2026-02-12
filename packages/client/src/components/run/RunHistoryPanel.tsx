@@ -3,27 +3,31 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTaskRuns, type RunStatus } from '../../hooks/useTaskRuns';
 import { useRunEvents } from '../../hooks/useRunEvents';
 import { ExecutionEventList } from '../execution/ExecutionEventList';
-import { CONSOLE_LEXICON } from '../../lexicon/consoleLexicon';
+import { getConsoleLexiconSection } from '../../lexicon/consoleLexicon';
+import type { ConsoleLanguage } from '../../i18n/consoleLanguage';
 
 interface Props {
   taskId: string;
+  language?: ConsoleLanguage;
 }
 
-const copy = CONSOLE_LEXICON.runHistoryPanel;
-
-const statusConfig: Record<RunStatus, { label: string; color: string; dot: string }> = {
-  initializing: { label: copy.statuses.initializing, color: 'text-slate-400', dot: 'bg-slate-500' },
-  creating_worktree: { label: copy.statuses.creating_worktree, color: 'text-amber-400', dot: 'bg-amber-400' },
-  starting: { label: copy.statuses.starting, color: 'text-amber-400', dot: 'bg-amber-400' },
-  running: { label: copy.statuses.running, color: 'text-indigo-400', dot: 'bg-indigo-400' },
-  paused: { label: copy.statuses.paused, color: 'text-amber-400', dot: 'bg-amber-400' },
-  completed: { label: copy.statuses.completed, color: 'text-emerald-400', dot: 'bg-emerald-400' },
-  failed: { label: copy.statuses.failed, color: 'text-rose-400', dot: 'bg-rose-400' },
-  cancelled: { label: copy.statuses.cancelled, color: 'text-slate-400', dot: 'bg-slate-500' },
-  cleaning_up: { label: copy.statuses.cleaning_up, color: 'text-slate-400', dot: 'bg-slate-500' },
-};
-
-export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
+export const RunHistoryPanel: React.FC<Props> = ({ taskId, language = 'en' }) => {
+  const copy = getConsoleLexiconSection('runHistoryPanel', language);
+  const statusConfig: Record<RunStatus, { label: string; color: string; dot: string }> = {
+    initializing: { label: copy.statuses.initializing, color: 'text-slate-400', dot: 'bg-slate-500' },
+    creating_worktree: {
+      label: copy.statuses.creating_worktree,
+      color: 'text-amber-400',
+      dot: 'bg-amber-400',
+    },
+    starting: { label: copy.statuses.starting, color: 'text-amber-400', dot: 'bg-amber-400' },
+    running: { label: copy.statuses.running, color: 'text-indigo-400', dot: 'bg-indigo-400' },
+    paused: { label: copy.statuses.paused, color: 'text-amber-400', dot: 'bg-amber-400' },
+    completed: { label: copy.statuses.completed, color: 'text-emerald-400', dot: 'bg-emerald-400' },
+    failed: { label: copy.statuses.failed, color: 'text-rose-400', dot: 'bg-rose-400' },
+    cancelled: { label: copy.statuses.cancelled, color: 'text-slate-400', dot: 'bg-slate-500' },
+    cleaning_up: { label: copy.statuses.cleaning_up, color: 'text-slate-400', dot: 'bg-slate-500' },
+  };
   const { runs, isLoading, error, refresh } = useTaskRuns(taskId);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [eventType, setEventType] = useState<string>('');
@@ -64,7 +68,7 @@ export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
             type="button"
             onClick={() => setSelectedRunId(null)}
             className="mr-2 text-slate-500 hover:text-slate-300 transition-colors"
-            aria-label="Back to run list"
+            aria-label={copy.meta.backToRunList}
           >
             <ArrowLeft className="w-4 h-4" />
           </button>
@@ -73,12 +77,12 @@ export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
         )}
         <span className="font-semibold">{selectedRunId ? copy.titleTimeline : copy.titleHistory}</span>
         <div className="ml-auto flex items-center gap-2 text-xs text-slate-500">
-          {!selectedRunId && <span>{runs.length} Runs</span>}
+          {!selectedRunId && <span>{runs.length} {copy.meta.runsCountSuffix}</span>}
           <button
             type="button"
             onClick={() => (selectedRunId ? void refreshEvents() : void refresh())}
             className="p-1 text-slate-500 hover:text-slate-300 transition-colors"
-            aria-label={selectedRunId ? 'Refresh events' : 'Refresh runs'}
+            aria-label={selectedRunId ? copy.meta.refreshEvents : copy.meta.refreshRuns}
           >
             <RefreshCcw className={`w-3.5 h-3.5 ${(selectedRunId ? isLoadingEvents : isLoading) ? 'animate-spin' : ''}`} />
           </button>
@@ -123,7 +127,7 @@ export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
                       <span className="text-xs text-slate-500">{formatDate(run.createdAt)}</span>
                     </div>
                     <div className="text-xs text-slate-500">
-                      {run.durationMs ? formatDuration(run.durationMs) : '—'}
+                      {run.durationMs ? formatDuration(run.durationMs) : copy.meta.durationUnknown}
                     </div>
                   </div>
 
@@ -132,8 +136,8 @@ export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
                   </div>
 
                   <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate-500">
-                    <span>Agent: {run.agentType}</span>
-                    <span>Events: {run.eventCount}</span>
+                    <span>{copy.meta.agent}: {run.agentType}</span>
+                    <span>{copy.meta.events}: {run.eventCount}</span>
                     <span className="flex items-center gap-1">
                       <Clock className="w-3 h-3" />
                       {run.startedAt ? formatDate(run.startedAt) : copy.labels.notStarted}
@@ -150,7 +154,7 @@ export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
             {selectedRun && (
               <div className="run-list-item">
                 <div className="flex items-center justify-between text-xs text-slate-500">
-                  <span>Run {selectedRun.id.slice(0, 8)}</span>
+                  <span>{copy.meta.run} {selectedRun.id.slice(0, 8)}</span>
                   <span>{formatDate(selectedRun.createdAt)}</span>
                 </div>
                 <div className="mt-2 text-sm text-slate-200">
@@ -167,12 +171,12 @@ export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
                   onChange={(e) => setEventType(e.target.value)}
                   className="inline-select"
                 >
-                  <option value="">All</option>
-                  <option value="agent_event">Agent</option>
-                  <option value="status_changed">Status</option>
-                  <option value="session_started">Session Started</option>
-                  <option value="session_ended">Session Ended</option>
-                  <option value="progress">Progress</option>
+                  <option value="">{copy.filters.all}</option>
+                  <option value="agent_event">{copy.filters.agent}</option>
+                  <option value="status_changed">{copy.filters.status}</option>
+                  <option value="session_started">{copy.filters.sessionStarted}</option>
+                  <option value="session_ended">{copy.filters.sessionEnded}</option>
+                  <option value="progress">{copy.filters.progress}</option>
                 </select>
               </label>
 
@@ -184,15 +188,15 @@ export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
                   disabled={eventType !== 'agent_event'}
                   className="inline-select disabled:opacity-50"
                 >
-                  <option value="">All</option>
-                  <option value="thinking">Thinking</option>
-                  <option value="command">Command</option>
-                  <option value="file_change">File Change</option>
-                  <option value="tool_call">Tool Call</option>
-                  <option value="message">Message</option>
-                  <option value="error">Error</option>
-                  <option value="completed">Completed</option>
-                  <option value="raw_output">Raw Output</option>
+                  <option value="">{copy.filters.all}</option>
+                  <option value="thinking">{copy.filters.thinking}</option>
+                  <option value="command">{copy.filters.command}</option>
+                  <option value="file_change">{copy.filters.fileChange}</option>
+                  <option value="tool_call">{copy.filters.toolCall}</option>
+                  <option value="message">{copy.filters.message}</option>
+                  <option value="error">{copy.filters.error}</option>
+                  <option value="completed">{copy.filters.completed}</option>
+                  <option value="raw_output">{copy.filters.rawOutput}</option>
                 </select>
               </label>
             </div>
@@ -218,7 +222,7 @@ export const RunHistoryPanel: React.FC<Props> = ({ taskId }) => {
 
             {events.length > 0 && (
               <div className="run-list-item bg-slate-950/60">
-                <ExecutionEventList events={events} />
+                <ExecutionEventList events={events} language={language} />
               </div>
             )}
 
