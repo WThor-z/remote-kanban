@@ -12,11 +12,14 @@
 - 提供 workspace/project/task/run/executor 路由与健康检查能力。
 - 工作区相关能力包括：
   - `GET/POST/PATCH /api/workspaces`
+  - `POST /api/workspaces/{id}/projects`（在 workspace 根目录约束下手动注册项目）
+  - `GET /api/workspaces/{id}/projects/discover`（扫描 workspace root 下 Git 仓库）
   - 默认工作区启动自举（含 archived 工作区处理与 slug 冲突规避）
 - 执行路径具备 workspace 一致性约束：
   - 任务与项目 workspace 不一致时返回 `409`
   - 缺失 task workspace 绑定时会自动回填并持久化
 - 任务与项目列表支持按 `workspaceId`（任务还支持 `projectId`）过滤。
+- workspace-first 前端会始终传递已确认 workspace，后端仍保持显式过滤参数处理与一致性校验。
 - 执行能力委托给 `agent-runner`，远程主机协同由 `gateway` 管理器处理。
 
 ## 数据与存储影响

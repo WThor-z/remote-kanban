@@ -10,14 +10,19 @@
 
 ## 行为与边界
 - 渲染看板、任务详情面板与执行控制区域。
+- 启动时先进入 Workspace Entry，用户必须确认 workspace 后才进入主界面。
+- Workspace Entry 支持：
+  - 自动发现 host 选择 + manual hostId fallback（host 列表不可用时仍可创建 workspace）
+  - 在选定 workspace 下 discover 项目与手动创建项目
 - 支持 app 级 workspace scope 选择，并将 scope 传递到：
   - 任务创建弹窗（workspace -> project 级联筛选）
   - 看板任务可见范围过滤
 - `CreateTaskModal` 支持 `defaultWorkspaceId` 与上下文 fallback 机制。
-- `useProjects` / `useTaskApi` / `useTaskRuns` 支持 workspace/project 过滤与上下文字段显示。
+- `useProjects` 在保留既有列表能力的同时，新增 workspace 项目 discover/create helper，供 Workspace Entry 管理面板复用。
+- 不再提供“空 workspace = 全部工作区”回退语义。
 
 ## 数据与存储影响
-- 使用 localStorage 持久化 app 级 workspace scope（键：`vk-active-workspace-scope`）。
+- 使用 localStorage 持久化上次工作区选择（键：`vk-active-workspace-scope`），但仍需用户在 Workspace Entry 显式继续。
 - 其余状态仍以前端内存态为主。
 
 ## 权限与风险
@@ -29,7 +34,8 @@
 - 通过前端测试覆盖 scope 切换到 modal/filter 的关键链路。
 
 ## 测试与验证
-- 执行 `pnpm --filter client test`。
+- 执行 `pnpm --dir packages/client test`。
+- 执行 `pnpm --dir packages/client build`。
 
 ## 相关变更
 - 依赖 `@opencode-vibe/protocol`。
