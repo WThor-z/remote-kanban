@@ -186,7 +186,7 @@ async fn start_execution(
         task_id,
         &prompt,
         &req.agent_type,
-        &project.gateway_id.to_string(),
+        &project.gateway_id,
         &task.title,
         task.description.as_deref(),
         &project.local_path,
@@ -907,6 +907,7 @@ mod tests {
             .create(CreateWorkspaceRequest {
                 name: "other-workspace".to_string(),
                 slug: Some("other-workspace".to_string()),
+                host_id: "host-other".to_string(),
                 root_path: "/tmp/other-workspace".to_string(),
                 default_project_id: None,
             })
@@ -915,7 +916,7 @@ mod tests {
         let project = state
             .project_store()
             .register(
-                Uuid::new_v4(),
+                "host-bound".to_string(),
                 CreateProjectRequest {
                     name: "workspace-bound-project".to_string(),
                     local_path: "/tmp/workspace-bound-project".to_string(),
@@ -940,7 +941,7 @@ mod tests {
         state
             .gateway_manager()
             .register_host(
-                project.gateway_id.to_string(),
+                project.gateway_id.clone(),
                 HostCapabilities {
                     name: "Bound host".to_string(),
                     agents: vec!["opencode".to_string()],
@@ -975,7 +976,7 @@ mod tests {
         let project = state
             .project_store()
             .register(
-                Uuid::new_v4(),
+                "host-bound".to_string(),
                 CreateProjectRequest {
                     name: "matching-workspace-project".to_string(),
                     local_path: "/tmp/matching-workspace-project".to_string(),
@@ -1000,7 +1001,7 @@ mod tests {
         state
             .gateway_manager()
             .register_host(
-                project.gateway_id.to_string(),
+                project.gateway_id.clone(),
                 HostCapabilities {
                     name: "Bound host".to_string(),
                     agents: vec!["opencode".to_string()],
@@ -1035,7 +1036,7 @@ mod tests {
         let project = state
             .project_store()
             .register(
-                Uuid::new_v4(),
+                "host-backfill".to_string(),
                 CreateProjectRequest {
                     name: "backfill-workspace-project".to_string(),
                     local_path: "/tmp/backfill-workspace-project".to_string(),
@@ -1057,7 +1058,7 @@ mod tests {
         state
             .gateway_manager()
             .register_host(
-                project.gateway_id.to_string(),
+                project.gateway_id.clone(),
                 HostCapabilities {
                     name: "Bound host".to_string(),
                     agents: vec!["opencode".to_string()],
@@ -1095,7 +1096,7 @@ mod tests {
         let project = state
             .project_store()
             .register(
-                Uuid::new_v4(),
+                "host-offline".to_string(),
                 CreateProjectRequest {
                     name: "offline-project".to_string(),
                     local_path: "/tmp/offline-project".to_string(),
@@ -1136,7 +1137,7 @@ mod tests {
         let project = state
             .project_store()
             .register(
-                Uuid::new_v4(),
+                "host-dispatch".to_string(),
                 CreateProjectRequest {
                     name: "bound-project".to_string(),
                     local_path: "/tmp/bound-project".to_string(),
@@ -1158,7 +1159,7 @@ mod tests {
         state
             .gateway_manager()
             .register_host(
-                project.gateway_id.to_string(),
+                project.gateway_id.clone(),
                 HostCapabilities {
                     name: "Bound host".to_string(),
                     agents: vec!["opencode".to_string()],

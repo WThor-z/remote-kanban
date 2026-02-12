@@ -84,11 +84,7 @@ impl ProjectStore {
     ///
     /// If a project with the same (gateway_id, local_path) exists, update it.
     /// Otherwise, create a new project.
-    pub async fn register(
-        &self,
-        gateway_id: Uuid,
-        request: CreateProjectRequest,
-    ) -> Result<Project> {
+    pub async fn register(&self, gateway_id: String, request: CreateProjectRequest) -> Result<Project> {
         let mut projects = self.projects.write().await;
 
         // Check if project already exists for this gateway + path
@@ -144,7 +140,7 @@ impl ProjectStore {
     }
 
     /// Get a project by gateway_id and local_path
-    pub async fn get_by_gateway_path(&self, gateway_id: Uuid, local_path: &str) -> Option<Project> {
+    pub async fn get_by_gateway_path(&self, gateway_id: &str, local_path: &str) -> Option<Project> {
         let projects = self.projects.read().await;
         projects
             .values()
@@ -159,7 +155,7 @@ impl ProjectStore {
     }
 
     /// List projects for a specific gateway
-    pub async fn list_by_gateway(&self, gateway_id: Uuid) -> Vec<ProjectSummary> {
+    pub async fn list_by_gateway(&self, gateway_id: &str) -> Vec<ProjectSummary> {
         let projects = self.projects.read().await;
         projects
             .values()
@@ -244,7 +240,7 @@ mod tests {
         let default_workspace_id = Uuid::new_v4();
 
         let store = ProjectStore::new(path.clone(), default_workspace_id).await.unwrap();
-        let gateway_id = Uuid::new_v4();
+        let gateway_id = "host-one".to_string();
         let workspace_id = Uuid::new_v4();
 
         let request = CreateProjectRequest {
@@ -256,7 +252,7 @@ mod tests {
             workspace_id,
         };
 
-        let project = store.register(gateway_id, request).await.unwrap();
+        let project = store.register(gateway_id.clone(), request).await.unwrap();
 
         assert_eq!(project.name, "test-project");
         assert_eq!(project.gateway_id, gateway_id);
@@ -276,7 +272,7 @@ mod tests {
         let default_workspace_id = Uuid::new_v4();
 
         let store = ProjectStore::new(path, default_workspace_id).await.unwrap();
-        let gateway_id = Uuid::new_v4();
+        let gateway_id = "host-one".to_string();
         let workspace_id = Uuid::new_v4();
 
         let request1 = CreateProjectRequest {
@@ -288,7 +284,7 @@ mod tests {
             workspace_id,
         };
 
-        let project1 = store.register(gateway_id, request1).await.unwrap();
+        let project1 = store.register(gateway_id.clone(), request1).await.unwrap();
 
         // Register again with same gateway + path
         let request2 = CreateProjectRequest {
@@ -300,7 +296,7 @@ mod tests {
             workspace_id,
         };
 
-        let project2 = store.register(gateway_id, request2).await.unwrap();
+        let project2 = store.register(gateway_id.clone(), request2).await.unwrap();
 
         // Should update, not create new
         assert_eq!(project1.id, project2.id);
@@ -319,7 +315,7 @@ mod tests {
         let default_workspace_id = Uuid::new_v4();
 
         let store = ProjectStore::new(path, default_workspace_id).await.unwrap();
-        let gateway_id = Uuid::new_v4();
+        let gateway_id = "host-one".to_string();
         let workspace_id_1 = Uuid::new_v4();
         let workspace_id_2 = Uuid::new_v4();
 
@@ -331,7 +327,7 @@ mod tests {
             worktree_dir: None,
             workspace_id: workspace_id_1,
         };
-        let project1 = store.register(gateway_id, first).await.unwrap();
+        let project1 = store.register(gateway_id.clone(), first).await.unwrap();
 
         let second = CreateProjectRequest {
             name: "project-v2".to_string(),
@@ -341,7 +337,7 @@ mod tests {
             worktree_dir: None,
             workspace_id: workspace_id_2,
         };
-        let project2 = store.register(gateway_id, second).await.unwrap();
+        let project2 = store.register(gateway_id.clone(), second).await.unwrap();
 
         assert_eq!(project1.id, project2.id);
         assert_eq!(project2.workspace_id, workspace_id_2);
@@ -353,7 +349,7 @@ mod tests {
         let path = dir.path().join("projects.json");
         let default_workspace_id = Uuid::new_v4();
         let project_id = Uuid::new_v4();
-        let gateway_id = Uuid::new_v4();
+        let gateway_id = "host-legacy";
 
         let legacy_json = format!(
             r#"{{
@@ -391,7 +387,7 @@ struct StoredProject {
     local_path: String,
     remote_url: Option<String>,
     default_branch: String,
-    gateway_id: Uuid,
+    gateway_id: String,
     workspace_id: Option<Uuid>,
     worktree_dir: String,
     created_at: DateTime<Utc>,

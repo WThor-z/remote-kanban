@@ -734,6 +734,7 @@ mod tests {
             .create(CreateWorkspaceRequest {
                 name: "Workspace Two".to_string(),
                 slug: Some("workspace-two".to_string()),
+                host_id: "host-two".to_string(),
                 root_path: "/tmp/workspace-two".to_string(),
                 default_project_id: None,
             })
@@ -744,7 +745,7 @@ mod tests {
         let project_1 = state
             .project_store()
             .register(
-                Uuid::new_v4(),
+                "host-one".to_string(),
                 CreateProjectRequest {
                     name: "project-one".to_string(),
                     local_path: "/tmp/project-one".to_string(),
@@ -760,7 +761,7 @@ mod tests {
         let project_2 = state
             .project_store()
             .register(
-                Uuid::new_v4(),
+                "host-two".to_string(),
                 CreateProjectRequest {
                     name: "project-two".to_string(),
                     local_path: "/tmp/project-two".to_string(),
@@ -1181,7 +1182,7 @@ mod tests {
         let project = state
             .project_store()
             .register(
-                Uuid::new_v4(),
+                "host-test".to_string(),
                 CreateProjectRequest {
                     name: "test-project".to_string(),
                     local_path: "/tmp/test-project".to_string(),

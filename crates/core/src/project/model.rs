@@ -27,7 +27,7 @@ pub struct Project {
     pub default_branch: String,
 
     /// ID of the Gateway this project is bound to
-    pub gateway_id: Uuid,
+    pub gateway_id: String,
 
     /// ID of the workspace this project belongs to
     pub workspace_id: Uuid,
@@ -48,7 +48,7 @@ impl Project {
     pub fn new(
         name: impl Into<String>,
         local_path: impl Into<String>,
-        gateway_id: Uuid,
+        gateway_id: impl Into<String>,
         workspace_id: Uuid,
     ) -> Self {
         let now = Utc::now();
@@ -58,7 +58,7 @@ impl Project {
             local_path: local_path.into(),
             remote_url: None,
             default_branch: "main".to_string(),
-            gateway_id,
+            gateway_id: gateway_id.into(),
             workspace_id,
             worktree_dir: ".worktrees".to_string(),
             created_at: now,
@@ -121,7 +121,7 @@ pub struct ProjectSummary {
     pub local_path: String,
     pub remote_url: Option<String>,
     pub default_branch: String,
-    pub gateway_id: Uuid,
+    pub gateway_id: String,
     pub workspace_id: Uuid,
     pub worktree_dir: String,
     pub created_at: DateTime<Utc>,
@@ -136,7 +136,7 @@ impl From<&Project> for ProjectSummary {
             local_path: project.local_path.clone(),
             remote_url: project.remote_url.clone(),
             default_branch: project.default_branch.clone(),
-            gateway_id: project.gateway_id,
+            gateway_id: project.gateway_id.clone(),
             workspace_id: project.workspace_id,
             worktree_dir: project.worktree_dir.clone(),
             created_at: project.created_at,
@@ -151,9 +151,14 @@ mod tests {
 
     #[test]
     fn test_create_project() {
-        let gateway_id = Uuid::new_v4();
+        let gateway_id = "host-1".to_string();
         let workspace_id = Uuid::new_v4();
-        let project = Project::new("my-project", "/path/to/project", gateway_id, workspace_id);
+        let project = Project::new(
+            "my-project",
+            "/path/to/project",
+            gateway_id.clone(),
+            workspace_id,
+        );
 
         assert_eq!(project.name, "my-project");
         assert_eq!(project.local_path, "/path/to/project");
@@ -166,7 +171,7 @@ mod tests {
 
     #[test]
     fn test_project_with_builders() {
-        let gateway_id = Uuid::new_v4();
+        let gateway_id = "host-1".to_string();
         let workspace_id = Uuid::new_v4();
         let project = Project::new("my-project", "/path/to/project", gateway_id, workspace_id)
             .with_remote_url("git@github.com:user/repo.git")
@@ -183,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_worktrees_path() {
-        let gateway_id = Uuid::new_v4();
+        let gateway_id = "host-1".to_string();
         let workspace_id = Uuid::new_v4();
         let project = Project::new("my-project", "/path/to/project", gateway_id, workspace_id);
 
@@ -193,7 +198,7 @@ mod tests {
 
     #[test]
     fn test_project_summary_includes_workspace_id() {
-        let gateway_id = Uuid::new_v4();
+        let gateway_id = "host-1".to_string();
         let workspace_id = Uuid::new_v4();
         let project = Project::new("my-project", "/path/to/project", gateway_id, workspace_id);
 

@@ -10,6 +10,7 @@ pub struct Workspace {
     pub id: Uuid,
     pub name: String,
     pub slug: String,
+    pub host_id: String,
     pub root_path: String,
     pub default_project_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
@@ -18,13 +19,18 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub fn new(name: impl Into<String>, root_path: impl Into<String>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        host_id: impl Into<String>,
+        root_path: impl Into<String>,
+    ) -> Self {
         let name = name.into();
         let now = Utc::now();
         Self {
             id: Uuid::new_v4(),
             slug: slugify(&name),
             name,
+            host_id: host_id.into(),
             root_path: root_path.into(),
             default_project_id: None,
             created_at: now,
@@ -52,6 +58,7 @@ impl Workspace {
 pub struct CreateWorkspaceRequest {
     pub name: String,
     pub slug: Option<String>,
+    pub host_id: String,
     pub root_path: String,
     pub default_project_id: Option<Uuid>,
 }
@@ -62,6 +69,7 @@ pub struct WorkspaceSummary {
     pub id: Uuid,
     pub name: String,
     pub slug: String,
+    pub host_id: String,
     pub root_path: String,
     pub default_project_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
@@ -75,6 +83,7 @@ impl From<&Workspace> for WorkspaceSummary {
             id: workspace.id,
             name: workspace.name.clone(),
             slug: workspace.slug.clone(),
+            host_id: workspace.host_id.clone(),
             root_path: workspace.root_path.clone(),
             default_project_id: workspace.default_project_id,
             created_at: workspace.created_at,
@@ -135,10 +144,11 @@ mod tests {
 
     #[test]
     fn test_create_workspace_defaults() {
-        let workspace = Workspace::new("Platform", "/repos/platform");
+        let workspace = Workspace::new("Platform", "host-1", "/repos/platform");
 
         assert_eq!(workspace.name, "Platform");
         assert_eq!(workspace.slug, "platform");
+        assert_eq!(workspace.host_id, "host-1");
         assert_eq!(workspace.root_path, "/repos/platform");
         assert!(workspace.default_project_id.is_none());
         assert!(workspace.archived_at.is_none());
@@ -147,7 +157,8 @@ mod tests {
 
     #[test]
     fn test_workspace_with_slug_and_archive() {
-        let workspace = Workspace::new("Platform", "/repos/platform").with_slug("team-platform");
+        let workspace =
+            Workspace::new("Platform", "host-1", "/repos/platform").with_slug("team-platform");
         assert_eq!(workspace.slug, "team-platform");
 
         let archived = workspace.archive();
@@ -171,9 +182,10 @@ mod tests {
 
     #[test]
     fn test_workspace_serializes_in_camel_case() {
-        let workspace = Workspace::new("Platform", "/repos/platform");
+        let workspace = Workspace::new("Platform", "host-1", "/repos/platform");
         let value = serde_json::to_value(&workspace).unwrap();
 
+        assert_eq!(value["hostId"], json!("host-1"));
         assert_eq!(value["rootPath"], json!("/repos/platform"));
         assert!(value.get("root_path").is_none());
         assert!(value.get("createdAt").is_some());

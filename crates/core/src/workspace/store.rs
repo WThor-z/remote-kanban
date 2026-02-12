@@ -5,7 +5,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -22,24 +23,68 @@ pub struct WorkspaceStore {
 
 impl WorkspaceStore {
     pub async fn new(file_path: PathBuf) -> Result<Self> {
-        let workspaces = if file_path.exists() {
+        let (workspaces, migrated_legacy_workspaces) = if file_path.exists() {
             let content = tokio::fs::read_to_string(&file_path)
                 .await
                 .map_err(|e| Error::Storage(format!("Failed to read workspaces file: {}", e)))?;
-            serde_json::from_str(&content)
-                .map_err(|e| Error::Storage(format!("Failed to parse workspaces file: {}", e)))?
+
+            let loaded: HashMap<Uuid, StoredWorkspace> = serde_json::from_str(&content)
+                .map_err(|e| Error::Storage(format!("Failed to parse workspaces file: {}", e)))?;
+
+            let mut migrated = false;
+            let workspaces = loaded
+                .into_values()
+                .map(|workspace| {
+                    let host_id = match workspace.host_id {
+                        Some(host_id) => host_id,
+                        None => {
+                            migrated = true;
+                            "local".to_string()
+                        }
+                    };
+                    (
+                        workspace.id,
+                        Workspace {
+                            id: workspace.id,
+                            name: workspace.name,
+                            slug: workspace.slug,
+                            host_id,
+                            root_path: workspace.root_path,
+                            default_project_id: workspace.default_project_id,
+                            created_at: workspace.created_at,
+                            updated_at: workspace.updated_at,
+                            archived_at: workspace.archived_at,
+                        },
+                    )
+                })
+                .collect();
+            (workspaces, migrated)
         } else {
-            HashMap::new()
+            (HashMap::new(), false)
         };
 
-        Ok(Self {
+        let store = Self {
             workspaces: Arc::new(RwLock::new(workspaces)),
             file_path,
-        })
+        };
+
+        if migrated_legacy_workspaces {
+            let snapshot = store.workspaces.read().await.clone();
+            store.persist_snapshot(&snapshot).await?;
+        }
+
+        Ok(store)
     }
 
     pub async fn create(&self, request: CreateWorkspaceRequest) -> Result<Workspace> {
-        let mut workspace = Workspace::new(request.name, request.root_path);
+        let host_id = request.host_id.trim().to_string();
+        if host_id.is_empty() {
+            return Err(Error::InvalidInput(
+                "Workspace hostId cannot be empty".to_string(),
+            ));
+        }
+
+        let mut workspace = Workspace::new(request.name, host_id, request.root_path);
         if let Some(slug) = request.slug {
             let normalized = normalize_slug(&slug)
                 .ok_or_else(|| Error::InvalidInput("Workspace slug cannot be empty".to_string()))?;
@@ -88,6 +133,12 @@ impl WorkspaceStore {
         let mut updated = workspace;
         updated.slug = normalize_slug(&updated.slug)
             .ok_or_else(|| Error::InvalidInput("Workspace slug cannot be empty".to_string()))?;
+        updated.host_id = updated.host_id.trim().to_string();
+        if updated.host_id.is_empty() {
+            return Err(Error::InvalidInput(
+                "Workspace hostId cannot be empty".to_string(),
+            ));
+        }
         updated.updated_at = Utc::now();
         if workspaces
             .values()
@@ -178,6 +229,20 @@ impl WorkspaceStore {
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredWorkspace {
+    id: Uuid,
+    name: String,
+    slug: String,
+    host_id: Option<String>,
+    root_path: String,
+    default_project_id: Option<Uuid>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    archived_at: Option<DateTime<Utc>>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +252,7 @@ mod tests {
         CreateWorkspaceRequest {
             name: name.to_string(),
             slug: slug.map(str::to_string),
+            host_id: "host-1".to_string(),
             root_path: format!("/repos/{}", name.to_lowercase().replace(' ', "-")),
             default_project_id: None,
         }
@@ -203,6 +269,7 @@ mod tests {
             .create(CreateWorkspaceRequest {
                 name: "Platform".to_string(),
                 slug: None,
+                host_id: "host-1".to_string(),
                 root_path: "/repos/platform".to_string(),
                 default_project_id: None,
             })
@@ -251,6 +318,38 @@ mod tests {
 
         let invalid = store.create(create_request("Invalid", Some("---"))).await;
         assert!(matches!(invalid, Err(Error::InvalidInput(_))));
+    }
+
+    #[tokio::test]
+    async fn test_create_rejects_empty_host_id() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("workspaces.json");
+        let store = WorkspaceStore::new(path).await.unwrap();
+
+        let result = store
+            .create(CreateWorkspaceRequest {
+                name: "Platform".to_string(),
+                slug: None,
+                host_id: "   ".to_string(),
+                root_path: "/repos/platform".to_string(),
+                default_project_id: None,
+            })
+            .await;
+        assert!(matches!(result, Err(Error::InvalidInput(_))));
+    }
+
+    #[tokio::test]
+    async fn test_update_rejects_empty_host_id() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("workspaces.json");
+        let store = WorkspaceStore::new(path).await.unwrap();
+
+        let created = store.create(create_request("Platform", None)).await.unwrap();
+        let mut to_update = created.clone();
+        to_update.host_id = "".to_string();
+
+        let result = store.update(to_update).await;
+        assert!(matches!(result, Err(Error::InvalidInput(_))));
     }
 
     #[tokio::test]

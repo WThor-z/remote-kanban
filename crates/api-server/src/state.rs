@@ -76,6 +76,7 @@ impl AppState {
                 .create(CreateWorkspaceRequest {
                     name: "Default Workspace".to_string(),
                     slug: Some(slug),
+                    host_id: default_workspace_host_id(),
                     root_path: repo_path.to_string_lossy().to_string(),
                     default_project_id: None,
                 })
@@ -224,6 +225,39 @@ fn next_default_workspace_slug(workspaces: &[WorkspaceSummary]) -> String {
     }
 }
 
+fn default_workspace_host_id() -> String {
+    if let Ok(host_id) = std::env::var("GATEWAY_HOST_ID") {
+        let trimmed = host_id.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    let raw_hostname = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "gateway-host".to_string());
+    let hostname = raw_hostname.trim().to_lowercase();
+
+    let mut sanitized = String::with_capacity(hostname.len());
+    let mut last_was_dash = false;
+    for ch in hostname.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+            sanitized.push(ch);
+            last_was_dash = false;
+        } else if !last_was_dash {
+            sanitized.push('-');
+            last_was_dash = true;
+        }
+    }
+
+    let trimmed = sanitized.trim_matches('-');
+    if trimmed.is_empty() {
+        "host-gateway-host".to_string()
+    } else {
+        format!("host-{}", trimmed)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,6 +303,7 @@ mod tests {
             .create(CreateWorkspaceRequest {
                 name: "Workspace One".to_string(),
                 slug: None,
+                host_id: "host-1".to_string(),
                 root_path: "/tmp/workspace-one".to_string(),
                 default_project_id: None,
             })
@@ -317,7 +352,7 @@ mod tests {
         let project = state
             .project_store()
             .register(
-                Uuid::new_v4(),
+                "host-1".to_string(),
                 CreateProjectRequest {
                     name: "Project One".to_string(),
                     local_path: "/tmp/project-one".to_string(),
@@ -358,6 +393,7 @@ mod tests {
             .create(CreateWorkspaceRequest {
                 name: "Archived Workspace".to_string(),
                 slug: Some("archived".to_string()),
+                host_id: "host-archived".to_string(),
                 root_path: "/tmp/archived-workspace".to_string(),
                 default_project_id: None,
             })
@@ -367,7 +403,7 @@ mod tests {
         let archived_workspace = workspace_store.update(archived_workspace).await.unwrap();
 
         let project_id = Uuid::new_v4();
-        let gateway_id = Uuid::new_v4();
+        let gateway_id = "host-legacy";
         let legacy_project_json = format!(
             r#"{{
   "{project_id}": {{
@@ -441,6 +477,7 @@ mod tests {
             .create(CreateWorkspaceRequest {
                 name: "Archived Default".to_string(),
                 slug: Some("default".to_string()),
+                host_id: "host-archived".to_string(),
                 root_path: "/tmp/archived-default".to_string(),
                 default_project_id: None,
             })
