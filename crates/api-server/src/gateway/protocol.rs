@@ -220,6 +220,7 @@ pub enum ServerToGatewayMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostStatus {
+    pub org_id: String,
     pub host_id: String,
     pub name: String,
     pub status: HostConnectionStatus,

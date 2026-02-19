@@ -13,6 +13,7 @@ use vk_core::task::{FileTaskStore, TaskRepository, TaskStatus};
 
 /// Host connection state
 pub struct HostConnection {
+    pub org_id: String,
     pub host_id: String,
     pub capabilities: HostCapabilities,
     pub tx: mpsc::Sender<ServerToGatewayMessage>,
@@ -112,17 +113,30 @@ impl GatewayManager {
         capabilities: HostCapabilities,
         tx: mpsc::Sender<ServerToGatewayMessage>,
     ) -> bool {
+        self.register_host_scoped("default".to_string(), host_id, capabilities, tx)
+            .await
+    }
+
+    /// Register a new host connection with org scope.
+    pub async fn register_host_scoped(
+        &self,
+        org_id: String,
+        host_id: String,
+        capabilities: HostCapabilities,
+        tx: mpsc::Sender<ServerToGatewayMessage>,
+    ) -> bool {
         let mut connections = self.connections.write().await;
-        
+
         if connections.contains_key(&host_id) {
             warn!("Host {} already registered, replacing connection", host_id);
         }
 
         info!("Registering host: {} ({})", host_id, capabilities.name);
-        
+
         connections.insert(
             host_id.clone(),
             HostConnection {
+                org_id,
                 host_id,
                 capabilities,
                 tx,
@@ -167,7 +181,11 @@ impl GatewayManager {
         host.active_tasks.push(task_id.clone());
 
         // Send task to gateway
-        if let Err(e) = host.tx.send(ServerToGatewayMessage::TaskExecute { task }).await {
+        if let Err(e) = host
+            .tx
+            .send(ServerToGatewayMessage::TaskExecute { task })
+            .await
+        {
             error!("Failed to send task to host {}: {}", host_id, e);
             // Remove from active tasks since send failed
             if let Some(conn) = connections.get_mut(&host_id) {
@@ -206,7 +224,11 @@ impl GatewayManager {
 
         conn.active_tasks.push(task_id.clone());
 
-        if let Err(e) = conn.tx.send(ServerToGatewayMessage::TaskExecute { task }).await {
+        if let Err(e) = conn
+            .tx
+            .send(ServerToGatewayMessage::TaskExecute { task })
+            .await
+        {
             error!("Failed to send task to host {}: {}", host_id, e);
             conn.active_tasks.retain(|id| id != &task_id);
             return Err(format!("Failed to dispatch task: {}", e));
@@ -245,7 +267,7 @@ impl GatewayManager {
             "Task {} completed on host {}: success={}",
             task_id, host_id, result.success
         );
-        
+
         // Update task status in TaskStore
         if let Some(task_store) = &self.task_store {
             if let Ok(task_uuid) = uuid::Uuid::parse_str(task_id) {
@@ -267,16 +289,19 @@ impl GatewayManager {
                 }
             }
         }
-        
+
         // Update KanbanStore (this is what the UI actually reads)
         if let Some(kanban_store) = &self.kanban_store {
-            if let Err(e) = kanban_store.move_task(task_id, KanbanTaskStatus::Done, None).await {
+            if let Err(e) = kanban_store
+                .move_task(task_id, KanbanTaskStatus::Done, None)
+                .await
+            {
                 warn!("Failed to move kanban task {} to Done: {}", task_id, e);
             } else {
                 info!("Kanban task {} moved to Done", task_id);
             }
         }
-        
+
         // Broadcast a synthetic "Completed" event so the event forwarder in executor.rs
         // can detect task completion and emit kanban:sync
         let completed_event = GatewayAgentEvent {
@@ -304,7 +329,7 @@ impl GatewayManager {
         drop(connections); // Release lock before async task store operations
 
         error!("Task {} failed on host {}: {}", task_id, host_id, error);
-        
+
         // Update task status in TaskStore (mark as Todo so user can retry)
         if let Some(task_store) = &self.task_store {
             if let Ok(task_uuid) = uuid::Uuid::parse_str(task_id) {
@@ -327,16 +352,19 @@ impl GatewayManager {
                 }
             }
         }
-        
+
         // Update KanbanStore - move back to Todo on failure
         if let Some(kanban_store) = &self.kanban_store {
-            if let Err(e) = kanban_store.move_task(task_id, KanbanTaskStatus::Todo, None).await {
+            if let Err(e) = kanban_store
+                .move_task(task_id, KanbanTaskStatus::Todo, None)
+                .await
+            {
                 warn!("Failed to move kanban task {} to Todo: {}", task_id, e);
             } else {
                 info!("Kanban task {} moved to Todo (failed)", task_id);
             }
         }
-        
+
         // Broadcast a synthetic "Failed" event so the event forwarder in executor.rs
         // can detect task failure and emit kanban:sync
         let failed_event = GatewayAgentEvent {
@@ -401,7 +429,7 @@ impl GatewayManager {
     /// Request available models from a specific gateway host
     pub async fn request_models(&self, host_id: &str) -> Result<Vec<ProviderInfo>, String> {
         let connections = self.connections.read().await;
-        
+
         let conn = connections
             .get(host_id)
             .ok_or_else(|| format!("Host {} not found", host_id))?;
@@ -418,7 +446,9 @@ impl GatewayManager {
 
         // Send the request to the gateway
         conn.tx
-            .send(ServerToGatewayMessage::ModelsRequest { request_id: request_id.clone() })
+            .send(ServerToGatewayMessage::ModelsRequest {
+                request_id: request_id.clone(),
+            })
             .await
             .map_err(|e| {
                 // Clean up pending request on send failure
@@ -441,7 +471,10 @@ impl GatewayManager {
             }
             Err(_) => {
                 // Timeout - clean up pending request
-                self.pending_model_requests.write().await.remove(&request_id);
+                self.pending_model_requests
+                    .write()
+                    .await
+                    .remove(&request_id);
                 Err("Models request timed out".to_string())
             }
         }
@@ -454,7 +487,10 @@ impl GatewayManager {
             let _ = tx.send(providers);
             debug!("Delivered models response for request {}", request_id);
         } else {
-            warn!("Received models response for unknown request {}", request_id);
+            warn!(
+                "Received models response for unknown request {}",
+                request_id
+            );
         }
     }
 
@@ -500,7 +536,10 @@ impl GatewayManager {
             Ok(Ok(Err(error))) => Err(error),
             Ok(Err(_)) => Err("Memory request was cancelled".to_string()),
             Err(_) => {
-                self.pending_memory_requests.write().await.remove(&request_id);
+                self.pending_memory_requests
+                    .write()
+                    .await
+                    .remove(&request_id);
                 Err("Memory request timed out".to_string())
             }
         }
@@ -523,7 +562,10 @@ impl GatewayManager {
             let _ = tx.send(result);
             debug!("Delivered memory response for request {}", request_id);
         } else {
-            warn!("Received memory response for unknown request {}", request_id);
+            warn!(
+                "Received memory response for unknown request {}",
+                request_id
+            );
         }
     }
 
@@ -569,6 +611,7 @@ impl GatewayManager {
                 };
 
                 HostStatus {
+                    org_id: conn.org_id.clone(),
                     host_id: conn.host_id.clone(),
                     name: conn.capabilities.name.clone(),
                     status,
@@ -636,6 +679,7 @@ mod tests {
         let hosts = manager.list_hosts().await;
         assert_eq!(hosts.len(), 1);
         assert_eq!(hosts[0].host_id, "host-1");
+        assert_eq!(hosts[0].org_id, "default");
         assert_eq!(hosts[0].name, "Test Host");
         assert_eq!(hosts[0].status, HostConnectionStatus::Online);
     }
@@ -702,7 +746,10 @@ mod tests {
 
         // Should have received the task
         let msg = rx.recv().await;
-        assert!(matches!(msg, Some(ServerToGatewayMessage::TaskExecute { .. })));
+        assert!(matches!(
+            msg,
+            Some(ServerToGatewayMessage::TaskExecute { .. })
+        ));
     }
 
     #[tokio::test]
@@ -774,7 +821,10 @@ mod tests {
         assert_eq!(result.unwrap(), "host-1");
 
         let msg = rx.recv().await;
-        assert!(matches!(msg, Some(ServerToGatewayMessage::TaskExecute { .. })));
+        assert!(matches!(
+            msg,
+            Some(ServerToGatewayMessage::TaskExecute { .. })
+        ));
     }
 
     #[tokio::test]
