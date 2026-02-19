@@ -2,18 +2,21 @@
 //!
 //! RESTful API for task CRUD operations.
 
+use agent_runner::{ChatMessage, ExecutionEvent, ExecutionStatus, RunSummary};
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header::HeaderName, HeaderMap, HeaderValue, StatusCode},
     routing::{delete, get},
     Json, Router,
 };
-use agent_runner::{ChatMessage, ExecutionEvent, ExecutionStatus, RunSummary};
 use serde::{Deserialize, Serialize};
+use tower_http::set_header::SetResponseHeaderLayer;
 use uuid::Uuid;
 
 use vk_core::task::{Task, TaskPriority, TaskRepository, TaskStatus};
 
+use crate::auth::{resolve_user_identity, UserIdentity};
+use crate::feature_flags::feature_multi_tenant;
 use crate::state::AppState;
 
 // ============================================================================
@@ -54,6 +57,7 @@ pub struct UpdateTaskRequest {
 #[serde(rename_all = "camelCase")]
 pub struct TaskResponse {
     pub id: Uuid,
+    pub org_id: String,
     pub project_id: Option<Uuid>,
     pub workspace_id: Option<Uuid>,
     pub title: String,
@@ -91,6 +95,8 @@ pub struct ListTasksQuery {
     pub project_id: Option<Uuid>,
     #[serde(default)]
     pub workspace_id: Option<Uuid>,
+    #[serde(default)]
+    pub org_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -143,6 +149,7 @@ impl From<Task> for TaskResponse {
     fn from(task: Task) -> Self {
         Self {
             id: task.id,
+            org_id: task.org_id,
             project_id: task.project_id,
             workspace_id: task.workspace_id,
             title: task.title,
@@ -170,8 +177,10 @@ pub struct ErrorResponse {
 /// GET /api/tasks - List all tasks
 async fn list_tasks(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<ListTasksQuery>,
 ) -> Result<Json<Vec<TaskResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    let identity = resolve_route_identity(&headers)?;
     let tasks = state.task_store().list().await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -181,17 +190,23 @@ async fn list_tasks(
         )
     })?;
 
+    let org_filter = identity
+        .as_ref()
+        .map(|current| current.org_id.as_str())
+        .or(query.org_id.as_deref());
+
     Ok(Json(
         tasks
             .into_iter()
             .filter(|task| {
+                let org_ok = org_filter.is_none_or(|org_id| task.org_id == org_id);
                 let project_ok = query
                     .project_id
                     .is_none_or(|project_id| task.project_id == Some(project_id));
                 let workspace_ok = query
                     .workspace_id
                     .is_none_or(|workspace_id| task.workspace_id == Some(workspace_id));
-                project_ok && workspace_ok
+                project_ok && workspace_ok && org_ok
             })
             .map(TaskResponse::from)
             .collect(),
@@ -201,8 +216,10 @@ async fn list_tasks(
 /// POST /api/tasks - Create a new task
 async fn create_task(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<CreateTaskRequest>,
 ) -> Result<(StatusCode, Json<TaskResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let identity = resolve_route_identity(&headers)?;
     // Validate input
     if req.title.trim().is_empty() {
         return Err((
@@ -233,8 +250,11 @@ async fn create_task(
             ));
         }
     };
+    ensure_project_visible(&project.org_id, identity.as_ref())?;
 
-    let mut task = Task::new(req.title).with_project_binding(project_id, project.workspace_id);
+    let mut task = Task::new(req.title)
+        .with_project_binding(project_id, project.workspace_id)
+        .with_org_id(project.org_id);
 
     if let Some(desc) = req.description {
         task = task.with_description(desc);
@@ -271,8 +291,10 @@ async fn create_task(
 /// GET /api/tasks/:id - Get a single task
 async fn get_task(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<Json<TaskResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let identity = resolve_route_identity(&headers)?;
     let task = state.task_store().get(id).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -283,7 +305,10 @@ async fn get_task(
     })?;
 
     match task {
-        Some(t) => Ok(Json(TaskResponse::from(t))),
+        Some(t) => {
+            ensure_task_visible(&t, identity.as_ref())?;
+            Ok(Json(TaskResponse::from(t)))
+        }
         None => Err((
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -296,8 +321,10 @@ async fn get_task(
 /// GET /api/tasks/:id/runs - List all runs for a task
 async fn list_task_runs(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<RunSummaryResponse>>, (StatusCode, Json<ErrorResponse>)> {
+    let identity = resolve_route_identity(&headers)?;
     let task = state.task_store().get(id).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -316,6 +343,7 @@ async fn list_task_runs(
         ));
     }
     let task = task.unwrap();
+    ensure_task_visible(&task, identity.as_ref())?;
 
     let runs = state.executor().list_runs(id).map_err(|e| {
         (
@@ -327,8 +355,7 @@ async fn list_task_runs(
     })?;
 
     Ok(Json(
-        runs
-            .into_iter()
+        runs.into_iter()
             .map(|run| {
                 let mut summary = RunSummaryResponse::from(run);
                 summary.project_id = summary.project_id.or(task.project_id);
@@ -342,8 +369,10 @@ async fn list_task_runs(
 /// DELETE /api/tasks/:id/runs - Delete all runs for a task
 async fn delete_task_runs(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let identity = resolve_route_identity(&headers)?;
     let task = state.task_store().get(id).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -361,6 +390,7 @@ async fn delete_task_runs(
             }),
         ));
     }
+    ensure_task_visible(&task.unwrap(), identity.as_ref())?;
 
     let runs = state.executor().list_runs(id).map_err(|e| {
         (
@@ -399,9 +429,11 @@ async fn delete_task_runs(
 /// GET /api/tasks/:id/runs/:run_id/events - List events for a run
 async fn list_run_events(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path((task_id, run_id)): Path<(Uuid, Uuid)>,
     Query(query): Query<RunEventsQuery>,
 ) -> Result<Json<RunEventsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let identity = resolve_route_identity(&headers)?;
     let task = state.task_store().get(task_id).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -419,6 +451,7 @@ async fn list_run_events(
             }),
         ));
     }
+    ensure_task_visible(&task.unwrap(), identity.as_ref())?;
 
     let runs = state.executor().list_runs(task_id).map_err(|e| {
         (
@@ -441,23 +474,30 @@ async fn list_run_events(
     let offset = query.offset.unwrap_or(0);
     let limit = query.limit.unwrap_or(200).min(1000);
 
-    let (events, has_more) = state.executor().load_run_events(
-        task_id,
-        run_id,
-        offset,
-        limit,
-        query.event_type,
-        query.agent_event_type,
-    ).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
+    let (events, has_more) = state
+        .executor()
+        .load_run_events(
+            task_id,
+            run_id,
+            offset,
+            limit,
+            query.event_type,
+            query.agent_event_type,
         )
-    })?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
 
-    let next_offset = if has_more { Some(offset + events.len()) } else { None };
+    let next_offset = if has_more {
+        Some(offset + events.len())
+    } else {
+        None
+    };
 
     Ok(Json(RunEventsResponse {
         events,
@@ -469,8 +509,10 @@ async fn list_run_events(
 /// GET /api/tasks/:id/runs/:run_id/messages - List messages for a run
 async fn list_run_messages(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path((task_id, run_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<RunMessagesResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let identity = resolve_route_identity(&headers)?;
     // Verify task exists
     let task = state.task_store().get(task_id).await.map_err(|e| {
         (
@@ -489,16 +531,21 @@ async fn list_run_messages(
             }),
         ));
     }
+    ensure_task_visible(&task.unwrap(), identity.as_ref())?;
 
     // Load messages from RunStore
-    let messages = state.executor().run_store().load_messages(task_id, run_id).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let messages = state
+        .executor()
+        .run_store()
+        .load_messages(task_id, run_id)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
 
     Ok(Json(RunMessagesResponse { messages }))
 }
@@ -506,8 +553,10 @@ async fn list_run_messages(
 /// DELETE /api/tasks/:id/runs/:run_id - Delete a run
 async fn delete_run(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path((task_id, run_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let identity = resolve_route_identity(&headers)?;
     let task = state.task_store().get(task_id).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -525,6 +574,7 @@ async fn delete_run(
             }),
         ));
     }
+    ensure_task_visible(&task.unwrap(), identity.as_ref())?;
 
     let runs = state.executor().list_runs(task_id).map_err(|e| {
         (
@@ -572,9 +622,11 @@ async fn delete_run(
 /// PATCH /api/tasks/:id - Update a task
 async fn update_task(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateTaskRequest>,
 ) -> Result<Json<TaskResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let identity = resolve_route_identity(&headers)?;
     // First get the existing task
     let existing = state.task_store().get(id).await.map_err(|e| {
         (
@@ -596,6 +648,7 @@ async fn update_task(
             ))
         }
     };
+    ensure_task_visible(&task, identity.as_ref())?;
 
     // Apply updates
     if let Some(title) = req.title {
@@ -637,8 +690,28 @@ async fn update_task(
 /// DELETE /api/tasks/:id - Delete a task
 async fn delete_task(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let identity = resolve_route_identity(&headers)?;
+    let task = state.task_store().get(id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+    let Some(task) = task else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Task {} not found", id),
+            }),
+        ));
+    };
+    ensure_task_visible(&task, identity.as_ref())?;
+
     let deleted = state.task_store().delete(id).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -660,6 +733,47 @@ async fn delete_task(
     }
 }
 
+fn resolve_route_identity(
+    headers: &HeaderMap,
+) -> Result<Option<UserIdentity>, (StatusCode, Json<ErrorResponse>)> {
+    resolve_user_identity(headers, feature_multi_tenant())
+        .map_err(|error| (StatusCode::UNAUTHORIZED, Json(ErrorResponse { error })))
+}
+
+fn ensure_project_visible(
+    project_org_id: &str,
+    identity: Option<&UserIdentity>,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if let Some(identity) = identity {
+        if project_org_id != identity.org_id {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: "Project not found".to_string(),
+                }),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_task_visible(
+    task: &Task,
+    identity: Option<&UserIdentity>,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    if let Some(identity) = identity {
+        if task.org_id != identity.org_id {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Task {} not found", task.id),
+                }),
+            ));
+        }
+    }
+    Ok(())
+}
+
 // ============================================================================
 // Router
 // ============================================================================
@@ -677,7 +791,18 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/tasks/{id}/runs/{run_id}", delete(delete_run))
         .route("/api/tasks/{id}/runs/{run_id}/events", get(list_run_events))
-        .route("/api/tasks/{id}/runs/{run_id}/messages", get(list_run_messages))
+        .route(
+            "/api/tasks/{id}/runs/{run_id}/messages",
+            get(list_run_messages),
+        )
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("deprecation"),
+            HeaderValue::from_static("true"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("link"),
+            HeaderValue::from_static("</api/v1/executions>; rel=\"successor-version\""),
+        ))
 }
 
 #[cfg(test)]
@@ -686,7 +811,10 @@ mod tests {
     use std::sync::Arc;
 
     use agent_runner::{AgentType, Run};
-    use axum::{body::{to_bytes, Body}, http::Request};
+    use axum::{
+        body::{to_bytes, Body},
+        http::Request,
+    };
     use serde_json::{json, Value};
     use tempfile::TempDir;
     use tower::ServiceExt;
@@ -737,6 +865,7 @@ mod tests {
                 host_id: "host-two".to_string(),
                 root_path: "/tmp/workspace-two".to_string(),
                 default_project_id: None,
+                org_id: None,
             })
             .await
             .unwrap()
@@ -753,6 +882,7 @@ mod tests {
                     default_branch: None,
                     worktree_dir: None,
                     workspace_id: workspace_1,
+                    org_id: None,
                 },
             )
             .await
@@ -769,6 +899,7 @@ mod tests {
                     default_branch: None,
                     worktree_dir: None,
                     workspace_id: workspace_2,
+                    org_id: None,
                 },
             )
             .await
@@ -776,12 +907,16 @@ mod tests {
 
         let task_1 = state
             .task_store()
-            .create(Task::new("Task one".to_string()).with_project_binding(project_1.id, workspace_1))
+            .create(
+                Task::new("Task one".to_string()).with_project_binding(project_1.id, workspace_1),
+            )
             .await
             .unwrap();
         let task_2 = state
             .task_store()
-            .create(Task::new("Task two".to_string()).with_project_binding(project_2.id, workspace_2))
+            .create(
+                Task::new("Task two".to_string()).with_project_binding(project_2.id, workspace_2),
+            )
             .await
             .unwrap();
         state
@@ -822,7 +957,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(by_workspace.status(), StatusCode::OK);
-        let by_workspace_body = to_bytes(by_workspace.into_body(), usize::MAX).await.unwrap();
+        let by_workspace_body = to_bytes(by_workspace.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let by_workspace_payload: Value = serde_json::from_slice(&by_workspace_body).unwrap();
         let by_workspace_items = by_workspace_payload.as_array().unwrap();
         assert_eq!(by_workspace_items.len(), 1);
@@ -1190,6 +1327,7 @@ mod tests {
                     default_branch: None,
                     worktree_dir: None,
                     workspace_id,
+                    org_id: None,
                 },
             )
             .await
@@ -1220,5 +1358,26 @@ mod tests {
         let payload: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(payload["projectId"], project.id.to_string());
         assert_eq!(payload["workspaceId"], workspace_id.to_string());
+    }
+
+    #[tokio::test]
+    async fn task_router_sets_deprecation_header() {
+        let (state, _temp_dir) = build_state().await;
+        let app = router().with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/tasks")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let deprecation = response.headers().get("deprecation").unwrap();
+        assert_eq!(deprecation, "true");
     }
 }

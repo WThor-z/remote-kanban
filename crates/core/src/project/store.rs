@@ -2,11 +2,11 @@
 //!
 //! Provides file-based persistence for projects.
 
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use chrono::{DateTime, Utc};
-use serde::Deserialize;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -14,6 +14,14 @@ use crate::error::Error;
 use crate::Result;
 
 use super::model::{CreateProjectRequest, Project, ProjectSummary};
+
+fn default_org_id() -> String {
+    std::env::var("VK_DEFAULT_ORG_ID")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "default-org".to_string())
+}
 
 /// Thread-safe project store with file persistence
 #[derive(Clone)]
@@ -28,12 +36,11 @@ impl ProjectStore {
     /// Create a new ProjectStore with the given file path
     pub async fn new(file_path: PathBuf, default_workspace_id: Uuid) -> Result<Self> {
         let (projects, migrated_legacy_projects) = if file_path.exists() {
-            let content = tokio::fs::read_to_string(&file_path).await.map_err(|e| {
-                Error::Storage(format!("Failed to read projects file: {}", e))
-            })?;
-            let loaded: HashMap<Uuid, StoredProject> = serde_json::from_str(&content).map_err(|e| {
-                Error::Storage(format!("Failed to parse projects file: {}", e))
-            })?;
+            let content = tokio::fs::read_to_string(&file_path)
+                .await
+                .map_err(|e| Error::Storage(format!("Failed to read projects file: {}", e)))?;
+            let loaded: HashMap<Uuid, StoredProject> = serde_json::from_str(&content)
+                .map_err(|e| Error::Storage(format!("Failed to parse projects file: {}", e)))?;
 
             let mut migrated = false;
             let projects = loaded
@@ -46,11 +53,19 @@ impl ProjectStore {
                             default_workspace_id
                         }
                     };
+                    let org_id = match project.org_id {
+                        Some(org_id) if !org_id.trim().is_empty() => org_id.trim().to_string(),
+                        _ => {
+                            migrated = true;
+                            default_org_id()
+                        }
+                    };
                     (
                         project.id,
                         Project {
                             id: project.id,
                             name: project.name,
+                            org_id,
                             local_path: project.local_path,
                             remote_url: project.remote_url,
                             default_branch: project.default_branch,
@@ -84,18 +99,30 @@ impl ProjectStore {
     ///
     /// If a project with the same (gateway_id, local_path) exists, update it.
     /// Otherwise, create a new project.
-    pub async fn register(&self, gateway_id: String, request: CreateProjectRequest) -> Result<Project> {
+    pub async fn register(
+        &self,
+        gateway_id: String,
+        request: CreateProjectRequest,
+    ) -> Result<Project> {
         let mut projects = self.projects.write().await;
+        let request_org_id = request
+            .org_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(default_org_id);
 
         // Check if project already exists for this gateway + path
-        let existing = projects.values().find(|p| {
-            p.gateway_id == gateway_id && p.local_path == request.local_path
-        });
+        let existing = projects
+            .values()
+            .find(|p| p.gateway_id == gateway_id && p.local_path == request.local_path);
 
         let project = if let Some(existing) = existing {
             // Update existing project
             let mut updated = existing.clone();
             updated.name = request.name;
+            updated.org_id = request_org_id.clone();
             updated.remote_url = request.remote_url;
             updated.workspace_id = request.workspace_id;
             if let Some(branch) = request.default_branch {
@@ -114,7 +141,8 @@ impl ProjectStore {
                 request.local_path,
                 gateway_id,
                 request.workspace_id,
-            );
+            )
+            .with_org_id(request_org_id);
             if let Some(url) = request.remote_url {
                 project = project.with_remote_url(url);
             }
@@ -197,20 +225,19 @@ impl ProjectStore {
     /// Persist the current state to file
     async fn persist(&self) -> Result<()> {
         let projects = self.projects.read().await;
-        let content = serde_json::to_string_pretty(&*projects).map_err(|e| {
-            Error::Storage(format!("Failed to serialize projects: {}", e))
-        })?;
+        let content = serde_json::to_string_pretty(&*projects)
+            .map_err(|e| Error::Storage(format!("Failed to serialize projects: {}", e)))?;
 
         // Ensure parent directory exists
         if let Some(parent) = self.file_path.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                Error::Storage(format!("Failed to create directory: {}", e))
-            })?;
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| Error::Storage(format!("Failed to create directory: {}", e)))?;
         }
 
-        tokio::fs::write(&self.file_path, content).await.map_err(|e| {
-            Error::Storage(format!("Failed to write projects file: {}", e))
-        })?;
+        tokio::fs::write(&self.file_path, content)
+            .await
+            .map_err(|e| Error::Storage(format!("Failed to write projects file: {}", e)))?;
 
         Ok(())
     }
@@ -239,7 +266,9 @@ mod tests {
         let path = dir.path().join("projects.json");
         let default_workspace_id = Uuid::new_v4();
 
-        let store = ProjectStore::new(path.clone(), default_workspace_id).await.unwrap();
+        let store = ProjectStore::new(path.clone(), default_workspace_id)
+            .await
+            .unwrap();
         let gateway_id = "host-one".to_string();
         let workspace_id = Uuid::new_v4();
 
@@ -250,6 +279,7 @@ mod tests {
             default_branch: Some("main".to_string()),
             worktree_dir: None,
             workspace_id,
+            org_id: Some("org-test".to_string()),
         };
 
         let project = store.register(gateway_id.clone(), request).await.unwrap();
@@ -257,12 +287,14 @@ mod tests {
         assert_eq!(project.name, "test-project");
         assert_eq!(project.gateway_id, gateway_id);
         assert_eq!(project.workspace_id, workspace_id);
+        assert_eq!(project.org_id, "org-test");
 
         // Verify persistence
         let store2 = ProjectStore::new(path, default_workspace_id).await.unwrap();
         let projects = store2.list().await;
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].workspace_id, workspace_id);
+        assert_eq!(projects[0].org_id, "org-test");
     }
 
     #[tokio::test]
@@ -282,6 +314,7 @@ mod tests {
             default_branch: None,
             worktree_dir: None,
             workspace_id,
+            org_id: Some("org-one".to_string()),
         };
 
         let project1 = store.register(gateway_id.clone(), request1).await.unwrap();
@@ -294,6 +327,7 @@ mod tests {
             default_branch: None,
             worktree_dir: None,
             workspace_id,
+            org_id: Some("org-two".to_string()),
         };
 
         let project2 = store.register(gateway_id.clone(), request2).await.unwrap();
@@ -303,6 +337,7 @@ mod tests {
         assert_eq!(project2.name, "project-v2");
         assert!(project2.remote_url.is_some());
         assert_eq!(project2.workspace_id, workspace_id);
+        assert_eq!(project2.org_id, "org-two");
 
         let projects = store.list().await;
         assert_eq!(projects.len(), 1);
@@ -326,6 +361,7 @@ mod tests {
             default_branch: None,
             worktree_dir: None,
             workspace_id: workspace_id_1,
+            org_id: Some("org-first".to_string()),
         };
         let project1 = store.register(gateway_id.clone(), first).await.unwrap();
 
@@ -336,11 +372,13 @@ mod tests {
             default_branch: None,
             worktree_dir: None,
             workspace_id: workspace_id_2,
+            org_id: Some("org-second".to_string()),
         };
         let project2 = store.register(gateway_id.clone(), second).await.unwrap();
 
         assert_eq!(project1.id, project2.id);
         assert_eq!(project2.workspace_id, workspace_id_2);
+        assert_eq!(project2.org_id, "org-second");
     }
 
     #[tokio::test]
@@ -384,6 +422,7 @@ mod tests {
 struct StoredProject {
     id: Uuid,
     name: String,
+    org_id: Option<String>,
     local_path: String,
     remote_url: Option<String>,
     default_branch: String,

@@ -2,19 +2,21 @@
 
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     routing::get,
     Json, Router,
 };
 use serde::{Deserialize, Deserializer};
-use std::fs;
 use std::collections::HashSet;
+use std::fs;
 use std::path::{Component, Path as FsPath, PathBuf};
 use uuid::Uuid;
 
 use vk_core::project::CreateProjectRequest;
 use vk_core::task::TaskRepository;
 
+use crate::auth::{resolve_user_identity, UserIdentity};
+use crate::feature_flags::feature_multi_tenant;
 use crate::state::AppState;
 use vk_core::workspace::{CreateWorkspaceRequest, Workspace, WorkspaceSummary};
 
@@ -82,15 +84,26 @@ where
     Ok(Some(Option::<Uuid>::deserialize(deserializer)?))
 }
 
-async fn list_workspaces(State(state): State<AppState>) -> Json<Vec<WorkspaceSummary>> {
-    let workspaces = state.workspace_store().list().await;
-    Json(workspaces)
+async fn list_workspaces(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<WorkspaceSummary>>, (StatusCode, String)> {
+    let identity = resolve_route_identity(&headers)?;
+    let mut workspaces = state.workspace_store().list().await;
+    if let Some(identity) = identity.as_ref() {
+        workspaces.retain(|workspace| workspace.org_id == identity.org_id);
+    }
+    Ok(Json(workspaces))
 }
 
 async fn create_workspace(
     State(state): State<AppState>,
-    Json(req): Json<CreateWorkspaceRequest>,
+    headers: HeaderMap,
+    Json(mut req): Json<CreateWorkspaceRequest>,
 ) -> Result<(StatusCode, Json<Workspace>), (StatusCode, String)> {
+    let identity = resolve_route_identity(&headers)?;
+    req.org_id = Some(scoped_org_id(identity.as_ref(), req.org_id.as_deref())?);
+
     let created = state
         .workspace_store()
         .create(req)
@@ -102,8 +115,10 @@ async fn create_workspace(
 
 async fn get_workspace(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Workspace>, (StatusCode, String)> {
+    let identity = resolve_route_identity(&headers)?;
     let workspace_id = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid workspace ID".to_string()))?;
 
@@ -112,15 +127,18 @@ async fn get_workspace(
         .get(workspace_id)
         .await
         .ok_or((StatusCode::NOT_FOUND, "Workspace not found".to_string()))?;
+    ensure_workspace_visible(&workspace, identity.as_ref())?;
 
     Ok(Json(workspace))
 }
 
 async fn update_workspace(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Json(req): Json<UpdateWorkspaceRequest>,
 ) -> Result<Json<Workspace>, (StatusCode, String)> {
+    let identity = resolve_route_identity(&headers)?;
     let workspace_id = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid workspace ID".to_string()))?;
 
@@ -129,6 +147,7 @@ async fn update_workspace(
         .get(workspace_id)
         .await
         .ok_or((StatusCode::NOT_FOUND, "Workspace not found".to_string()))?;
+    ensure_workspace_visible(&workspace, identity.as_ref())?;
 
     if let Some(name) = req.name {
         workspace.name = name;
@@ -157,9 +176,11 @@ async fn update_workspace(
 
 async fn delete_workspace(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Json(req): Json<DeleteWorkspaceRequest>,
 ) -> Result<Json<DeleteWorkspaceResponse>, (StatusCode, String)> {
+    let identity = resolve_route_identity(&headers)?;
     let workspace_id = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid workspace ID".to_string()))?;
 
@@ -168,6 +189,7 @@ async fn delete_workspace(
         .get(workspace_id)
         .await
         .ok_or((StatusCode::NOT_FOUND, "Workspace not found".to_string()))?;
+    ensure_workspace_visible(&workspace, identity.as_ref())?;
 
     if req.confirm_name != workspace.name {
         return Err((
@@ -228,9 +250,11 @@ async fn delete_workspace(
 
 async fn create_workspace_project(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Json(req): Json<CreateWorkspaceProjectRequest>,
 ) -> Result<(StatusCode, Json<WorkspaceProjectResponse>), (StatusCode, String)> {
+    let identity = resolve_route_identity(&headers)?;
     let workspace_id = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid workspace ID".to_string()))?;
 
@@ -239,6 +263,7 @@ async fn create_workspace_project(
         .get(workspace_id)
         .await
         .ok_or((StatusCode::NOT_FOUND, "Workspace not found".to_string()))?;
+    ensure_workspace_visible(&workspace, identity.as_ref())?;
 
     let gateway_id = resolve_workspace_gateway_id(&state, &workspace).await;
     if gateway_id != workspace.host_id {
@@ -326,6 +351,7 @@ async fn create_workspace_project(
                 default_branch: req.default_branch,
                 worktree_dir: req.worktree_dir,
                 workspace_id: workspace.id,
+                org_id: Some(workspace.org_id.clone()),
             },
         )
         .await
@@ -369,8 +395,10 @@ async fn resolve_workspace_gateway_id(state: &AppState, workspace: &Workspace) -
 
 async fn discover_workspace_projects(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<DiscoveredWorkspaceProject>>, (StatusCode, String)> {
+    let identity = resolve_route_identity(&headers)?;
     let workspace_id = Uuid::parse_str(&id)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid workspace ID".to_string()))?;
 
@@ -379,6 +407,7 @@ async fn discover_workspace_projects(
         .get(workspace_id)
         .await
         .ok_or((StatusCode::NOT_FOUND, "Workspace not found".to_string()))?;
+    ensure_workspace_visible(&workspace, identity.as_ref())?;
 
     let workspace_root = normalize_path(FsPath::new(&workspace.root_path));
     let existing_projects = state.project_store().list().await;
@@ -486,9 +515,65 @@ fn map_store_error(err: vk_core::Error) -> (StatusCode, String) {
     }
 }
 
+fn resolve_route_identity(
+    headers: &HeaderMap,
+) -> Result<Option<UserIdentity>, (StatusCode, String)> {
+    resolve_user_identity(headers, feature_multi_tenant())
+        .map_err(|err| (StatusCode::UNAUTHORIZED, err))
+}
+
+fn default_org_id() -> String {
+    std::env::var("VK_DEFAULT_ORG_ID")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "default-org".to_string())
+}
+
+fn scoped_org_id(
+    identity: Option<&UserIdentity>,
+    requested_org_id: Option<&str>,
+) -> Result<String, (StatusCode, String)> {
+    if let Some(identity) = identity {
+        if let Some(requested_org_id) = requested_org_id
+            .map(str::trim)
+            .filter(|org| !org.is_empty())
+        {
+            if requested_org_id != identity.org_id {
+                return Err((
+                    StatusCode::CONFLICT,
+                    "orgId does not match authenticated organization".to_string(),
+                ));
+            }
+        }
+        return Ok(identity.org_id.clone());
+    }
+
+    Ok(requested_org_id
+        .map(str::trim)
+        .filter(|org| !org.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(default_org_id))
+}
+
+fn ensure_workspace_visible(
+    workspace: &Workspace,
+    identity: Option<&UserIdentity>,
+) -> Result<(), (StatusCode, String)> {
+    if let Some(identity) = identity {
+        if workspace.org_id != identity.org_id {
+            return Err((StatusCode::NOT_FOUND, "Workspace not found".to_string()));
+        }
+    }
+    Ok(())
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/workspaces", get(list_workspaces).post(create_workspace))
+        .route(
+            "/api/workspaces",
+            get(list_workspaces).post(create_workspace),
+        )
         .route(
             "/api/workspaces/{id}/projects",
             axum::routing::post(create_workspace_project),
@@ -499,7 +584,9 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/workspaces/{id}",
-            get(get_workspace).patch(update_workspace).delete(delete_workspace),
+            get(get_workspace)
+                .patch(update_workspace)
+                .delete(delete_workspace),
         )
 }
 
@@ -798,9 +885,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(set_response.status(), StatusCode::OK);
-        let set_body = to_bytes(set_response.into_body(), usize::MAX).await.unwrap();
+        let set_body = to_bytes(set_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let set_payload: Value = serde_json::from_slice(&set_body).unwrap();
-        assert_eq!(set_payload["defaultProjectId"], default_project_id.to_string());
+        assert_eq!(
+            set_payload["defaultProjectId"],
+            default_project_id.to_string()
+        );
 
         let clear_response = app
             .oneshot(
@@ -815,7 +907,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(clear_response.status(), StatusCode::OK);
-        let clear_body = to_bytes(clear_response.into_body(), usize::MAX).await.unwrap();
+        let clear_body = to_bytes(clear_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let clear_payload: Value = serde_json::from_slice(&clear_body).unwrap();
         assert_eq!(clear_payload["defaultProjectId"], Value::Null);
     }
@@ -948,6 +1042,7 @@ mod tests {
                     default_branch: None,
                     worktree_dir: None,
                     workspace_id,
+                    org_id: None,
                 },
             )
             .await
@@ -963,6 +1058,7 @@ mod tests {
                     default_branch: None,
                     worktree_dir: None,
                     workspace_id,
+                    org_id: None,
                 },
             )
             .await
@@ -980,6 +1076,7 @@ mod tests {
                     default_branch: None,
                     worktree_dir: None,
                     workspace_id: other_workspace_id,
+                    org_id: None,
                 },
             )
             .await
@@ -998,8 +1095,7 @@ mod tests {
         let kept_task = state
             .task_store()
             .create(
-                Task::new("task-kept")
-                    .with_project_binding(other_project.id, other_workspace_id),
+                Task::new("task-kept").with_project_binding(other_project.id, other_workspace_id),
             )
             .await
             .unwrap();
@@ -1025,7 +1121,12 @@ mod tests {
         assert!(state.workspace_store().get(workspace_id).await.is_none());
         assert!(state.project_store().get(project_1.id).await.is_none());
         assert!(state.project_store().get(project_2.id).await.is_none());
-        assert!(state.task_store().get(kept_task.id).await.unwrap().is_some());
+        assert!(state
+            .task_store()
+            .get(kept_task.id)
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]
@@ -1205,7 +1306,10 @@ mod tests {
             .find(|project| project.workspace_id == workspace_id)
             .unwrap();
         assert_eq!(created_project.gateway_id, host_id);
-        assert_eq!(created_project.local_path, project_path.to_string_lossy().to_string());
+        assert_eq!(
+            created_project.local_path,
+            project_path.to_string_lossy().to_string()
+        );
     }
 
     #[tokio::test]
@@ -1416,6 +1520,7 @@ mod tests {
                 host_id: host_id.clone(),
                 root_path: "/repos/shared".to_string(),
                 default_project_id: None,
+                org_id: None,
             })
             .await
             .unwrap();
@@ -1428,6 +1533,7 @@ mod tests {
                 host_id: host_id.clone(),
                 root_path: "/repos/shared".to_string(),
                 default_project_id: None,
+                org_id: None,
             })
             .await
             .unwrap();
@@ -1443,6 +1549,7 @@ mod tests {
                     default_branch: None,
                     worktree_dir: None,
                     workspace_id: workspace_a.id,
+                    org_id: None,
                 },
             )
             .await
@@ -1479,10 +1586,16 @@ mod tests {
         let repo_a = workspace_root.join("repo-a");
         let repo_b = workspace_root.join("nested").join("repo-b");
         let repo_c = workspace_root.join("repo-c");
-        tokio::fs::create_dir_all(repo_a.join(".git")).await.unwrap();
-        tokio::fs::create_dir_all(repo_b.join(".git")).await.unwrap();
+        tokio::fs::create_dir_all(repo_a.join(".git"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(repo_b.join(".git"))
+            .await
+            .unwrap();
         tokio::fs::create_dir_all(&repo_c).await.unwrap();
-        tokio::fs::write(repo_c.join(".git"), "gitdir: /tmp/mock").await.unwrap();
+        tokio::fs::write(repo_c.join(".git"), "gitdir: /tmp/mock")
+            .await
+            .unwrap();
 
         let created = app
             .clone()

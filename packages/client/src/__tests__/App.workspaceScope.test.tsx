@@ -248,7 +248,7 @@ describe('App workspace scope handoff', () => {
 
     fireEvent.change(screen.getByLabelText(/select workspace/i), { target: { value: 'ws-1' } });
     fireEvent.click(screen.getByRole('button', { name: /continue to workspace/i }));
-    await screen.findByTestId('kanban-board');
+    await screen.findByRole('button', { name: /ops/i });
 
     fireEvent.click(screen.getByRole('button', { name: /switch language/i }));
 
@@ -263,7 +263,7 @@ describe('App workspace scope handoff', () => {
 
     fireEvent.change(screen.getByLabelText(/select workspace/i), { target: { value: 'ws-1' } });
     fireEvent.click(screen.getByRole('button', { name: /continue to workspace/i }));
-    await screen.findByTestId('kanban-board');
+    await screen.findByRole('button', { name: /manage projects/i });
 
     fireEvent.click(screen.getByRole('button', { name: /manage projects/i }));
 
@@ -287,7 +287,7 @@ describe('App workspace scope handoff', () => {
     await waitFor(() => {
       expect(fetchTasksMock).toHaveBeenCalledWith({ workspaceId: 'ws-2' });
     });
-    expect(screen.getByTestId('kanban-board')).toBeInTheDocument();
+    expect(screen.getByText('Ops Console')).toBeInTheDocument();
   });
 
   it('keeps entry page when stored workspace is stale', () => {
@@ -330,6 +330,7 @@ describe('App workspace scope handoff', () => {
 
     fireEvent.change(screen.getByLabelText(/select workspace/i), { target: { value: 'ws-1' } });
     fireEvent.click(screen.getByRole('button', { name: /continue to workspace/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /board/i }));
     fireEvent.click(await screen.findByRole('button', { name: /open task/i }));
     expect(screen.getByTestId('task-detail-panel')).toBeInTheDocument();
 
@@ -353,7 +354,7 @@ describe('App workspace scope handoff', () => {
 
     fireEvent.change(screen.getByLabelText(/select workspace/i), { target: { value: 'ws-1' } });
     fireEvent.click(screen.getByRole('button', { name: /continue to workspace/i }));
-    await screen.findByTestId('kanban-board');
+    await screen.findByRole('button', { name: /workspace scope/i });
 
     fireEvent.click(screen.getByRole('button', { name: /workspace scope/i }));
     fireEvent.click(screen.getByRole('button', { name: /workspace beta/i }));

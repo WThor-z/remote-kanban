@@ -1,13 +1,12 @@
 //! Worktree management
 
-use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::commands::{
-    branch_exists, delete_branch, git_command, git_command_checked,
-    is_git_repository,
+    branch_exists, delete_branch, git_command, git_command_checked, is_git_repository,
 };
 use crate::error::{Result, WorktreeError};
 
@@ -188,7 +187,8 @@ impl WorktreeManager {
 
     /// List all worktrees
     pub async fn list(&self) -> Result<Vec<Worktree>> {
-        let output = git_command_checked(&self.repo_path, &["worktree", "list", "--porcelain"]).await?;
+        let output =
+            git_command_checked(&self.repo_path, &["worktree", "list", "--porcelain"]).await?;
 
         let mut worktrees = Vec::new();
         let mut current_worktree: Option<Worktree> = None;
@@ -255,21 +255,17 @@ impl WorktreeManager {
     /// * `path` - Path to the worktree to remove
     /// * `force` - Force removal even if there are uncommitted changes
     /// * `delete_branch` - Also delete the associated branch
-    pub async fn remove(
-        &self,
-        path: &Path,
-        force: bool,
-        delete_branch_flag: bool,
-    ) -> Result<()> {
+    pub async fn remove(&self, path: &Path, force: bool, delete_branch_flag: bool) -> Result<()> {
         // Get worktree info first
-        let worktree = self.get(path).await?.ok_or_else(|| WorktreeError::WorktreeNotFound {
-            path: path.to_path_buf(),
-        })?;
+        let worktree = self
+            .get(path)
+            .await?
+            .ok_or_else(|| WorktreeError::WorktreeNotFound {
+                path: path.to_path_buf(),
+            })?;
 
         if worktree.is_main {
-            return Err(WorktreeError::git_failed(
-                "Cannot remove the main worktree",
-            ));
+            return Err(WorktreeError::git_failed("Cannot remove the main worktree"));
         }
 
         info!("Removing worktree at {:?}", path);
@@ -403,10 +399,12 @@ mod tests {
         git_command_checked(dir.path(), &["checkout", "-b", "main"])
             .await
             .ok(); // Ignore error if already on main
-        
+
         let test_file = dir.path().join("test.txt");
         tokio::fs::write(&test_file, "test content").await.unwrap();
-        git_command_checked(dir.path(), &["add", "."]).await.unwrap();
+        git_command_checked(dir.path(), &["add", "."])
+            .await
+            .unwrap();
         git_command_checked(dir.path(), &["commit", "-m", "Initial commit"])
             .await
             .unwrap();
@@ -425,7 +423,10 @@ mod tests {
     async fn test_create_worktree_manager_not_git_repo() {
         let dir = TempDir::new().unwrap();
         let result = WorktreeManager::new(dir.path()).await;
-        assert!(matches!(result, Err(WorktreeError::NotAGitRepository { .. })));
+        assert!(matches!(
+            result,
+            Err(WorktreeError::NotAGitRepository { .. })
+        ));
     }
 
     #[tokio::test]
@@ -507,13 +508,19 @@ mod tests {
         let worktree = manager.create("test-task", "main").await.unwrap();
 
         // Initially no changes
-        assert!(!manager.has_uncommitted_changes(&worktree.path).await.unwrap());
+        assert!(!manager
+            .has_uncommitted_changes(&worktree.path)
+            .await
+            .unwrap());
 
         // Make a change
         let new_file = worktree.path.join("new_file.txt");
         tokio::fs::write(&new_file, "new content").await.unwrap();
 
         // Now should have changes
-        assert!(manager.has_uncommitted_changes(&worktree.path).await.unwrap());
+        assert!(manager
+            .has_uncommitted_changes(&worktree.path)
+            .await
+            .unwrap());
     }
 }

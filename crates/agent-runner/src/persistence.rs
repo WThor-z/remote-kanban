@@ -19,7 +19,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::error::{ExecutorError, Result};
-use crate::event::{AgentEvent, ExecutionEvent, ExecutionEventType};
+use crate::event::{AgentEvent, ExecutionEvent, ExecutionEventType, ExecutionStatus};
 use crate::run::{ChatMessage, Run, RunSummary};
 
 /// Run store for persisting runs and events
@@ -150,6 +150,172 @@ impl RunStore {
         runs.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
         Ok(runs)
+    }
+
+    /// List runs across all tasks with pagination and optional filters.
+    pub fn list_runs_global_filtered_paginated(
+        &self,
+        offset: usize,
+        limit: usize,
+        status: Option<&str>,
+        org_id: Option<&str>,
+        host_id: Option<&str>,
+        task_id: Option<Uuid>,
+    ) -> Result<(Vec<Run>, bool)> {
+        if limit == 0 {
+            return Ok((Vec::new(), false));
+        }
+
+        if !self.base_dir.exists() {
+            return Ok((Vec::new(), false));
+        }
+
+        let mut runs = Vec::new();
+        let status = status
+            .map(|value| value.trim().to_lowercase())
+            .filter(|value| !value.is_empty());
+        let org_id = org_id.map(str::trim).filter(|value| !value.is_empty());
+        let host_id = host_id.map(str::trim).filter(|value| !value.is_empty());
+
+        let task_dirs = if let Some(task_id) = task_id {
+            vec![self.task_dir(task_id)]
+        } else {
+            fs::read_dir(&self.base_dir)
+                .map_err(ExecutorError::from)?
+                .filter_map(|entry| entry.ok().map(|value| value.path()))
+                .collect::<Vec<_>>()
+        };
+
+        for task_path in task_dirs {
+            if !task_path.exists() || !task_path.is_dir() {
+                continue;
+            }
+
+            let parsed_task_id = match task_path.file_name().and_then(|name| name.to_str()) {
+                Some(name) => match Uuid::parse_str(name) {
+                    Ok(id) => id,
+                    Err(_) => continue,
+                },
+                None => continue,
+            };
+
+            let run_entries = match fs::read_dir(&task_path) {
+                Ok(entries) => entries,
+                Err(err) => {
+                    warn!(
+                        "Failed to read run directory for task {}: {}",
+                        parsed_task_id, err
+                    );
+                    continue;
+                }
+            };
+
+            for run_entry in run_entries {
+                let run_entry = match run_entry {
+                    Ok(entry) => entry,
+                    Err(err) => {
+                        warn!("Failed to read run directory entry: {}", err);
+                        continue;
+                    }
+                };
+
+                let run_path = run_entry.path();
+                if !run_path.is_dir() {
+                    continue;
+                }
+
+                let run_id = match run_path.file_name().and_then(|name| name.to_str()) {
+                    Some(name) => match Uuid::parse_str(name) {
+                        Ok(id) => id,
+                        Err(_) => continue,
+                    },
+                    None => continue,
+                };
+
+                let run = match self.load_run(parsed_task_id, run_id) {
+                    Ok(run) => run,
+                    Err(err) => {
+                        warn!("Failed to load run {}: {}", run_id, err);
+                        continue;
+                    }
+                };
+
+                if let Some(ref status_filter) = status {
+                    let current = execution_status_label(run.status).to_lowercase();
+                    if current != *status_filter {
+                        continue;
+                    }
+                }
+
+                if let Some(org_filter) = org_id {
+                    if run.metadata.org_id.as_deref() != Some(org_filter) {
+                        continue;
+                    }
+                }
+
+                if let Some(host_filter) = host_id {
+                    if run.metadata.host_id.as_deref() != Some(host_filter) {
+                        continue;
+                    }
+                }
+
+                runs.push(run);
+            }
+        }
+
+        runs.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+
+        let total = runs.len();
+        let paged = runs
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect::<Vec<_>>();
+        let has_more = total > offset + paged.len();
+        Ok((paged, has_more))
+    }
+
+    /// Find a run by run ID across all task buckets.
+    ///
+    /// Returns `Ok(None)` when the run cannot be found.
+    pub fn find_run(&self, run_id: Uuid) -> Result<Option<Run>> {
+        if !self.base_dir.exists() {
+            return Ok(None);
+        }
+
+        let task_entries = fs::read_dir(&self.base_dir).map_err(ExecutorError::from)?;
+
+        for task_entry in task_entries {
+            let task_entry = match task_entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    warn!("Failed to read task run directory entry: {}", err);
+                    continue;
+                }
+            };
+
+            let task_path = task_entry.path();
+            if !task_path.is_dir() {
+                continue;
+            }
+
+            let task_id = match task_path.file_name().and_then(|name| name.to_str()) {
+                Some(name) => match Uuid::parse_str(name) {
+                    Ok(id) => id,
+                    Err(_) => continue,
+                },
+                None => continue,
+            };
+
+            let run_metadata = self.run_metadata_path(task_id, run_id);
+            if !run_metadata.exists() {
+                continue;
+            }
+
+            return self.load_run(task_id, run_id).map(Some);
+        }
+
+        Ok(None)
     }
 
     /// Append an event to a run's event log
@@ -345,6 +511,31 @@ impl RunStore {
         Ok((events, has_more))
     }
 
+    /// Load events by run ID without requiring caller-side task lookup.
+    pub fn load_events_by_run_id_filtered_paginated(
+        &self,
+        run_id: Uuid,
+        offset: usize,
+        limit: usize,
+        event_type: Option<&str>,
+        agent_event_type: Option<&str>,
+    ) -> Result<Option<(Run, Vec<ExecutionEvent>, bool)>> {
+        let Some(run) = self.find_run(run_id)? else {
+            return Ok(None);
+        };
+
+        let (events, has_more) = self.load_events_filtered_paginated(
+            run.task_id,
+            run.id,
+            offset,
+            limit,
+            event_type,
+            agent_event_type,
+        )?;
+
+        Ok(Some((run, events, has_more)))
+    }
+
     /// Delete a run and all its data
     pub fn delete_run(&self, task_id: Uuid, run_id: Uuid) -> Result<()> {
         let dir = self.run_dir(task_id, run_id);
@@ -486,6 +677,20 @@ fn matches_event_type(event: &ExecutionEvent, filter: &str) -> bool {
     }
 }
 
+fn execution_status_label(status: ExecutionStatus) -> &'static str {
+    match status {
+        ExecutionStatus::Initializing => "initializing",
+        ExecutionStatus::CreatingWorktree => "creating_worktree",
+        ExecutionStatus::Starting => "starting",
+        ExecutionStatus::Running => "running",
+        ExecutionStatus::Paused => "paused",
+        ExecutionStatus::Completed => "completed",
+        ExecutionStatus::Failed => "failed",
+        ExecutionStatus::Cancelled => "cancelled",
+        ExecutionStatus::CleaningUp => "cleaning_up",
+    }
+}
+
 fn matches_agent_event_type(event: &ExecutionEvent, filter: &str) -> bool {
     match &event.event {
         ExecutionEventType::AgentEvent { event } => match (filter, event) {
@@ -600,6 +805,126 @@ mod tests {
 
         let runs = store.list_runs(task_id).unwrap();
         assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn test_find_run_by_id_across_tasks() {
+        let (store, _temp) = create_test_store();
+        let task_1 = Uuid::new_v4();
+        let task_2 = Uuid::new_v4();
+
+        let run_1 = Run::new(
+            task_1,
+            AgentType::OpenCode,
+            "Task one prompt".to_string(),
+            "main".to_string(),
+        );
+        let run_2 = Run::new(
+            task_2,
+            AgentType::OpenCode,
+            "Task two prompt".to_string(),
+            "main".to_string(),
+        );
+        store.save_run(&run_1).unwrap();
+        store.save_run(&run_2).unwrap();
+
+        let found = store.find_run(run_2.id).unwrap().expect("run should exist");
+        assert_eq!(found.id, run_2.id);
+        assert_eq!(found.task_id, task_2);
+    }
+
+    #[test]
+    fn test_list_runs_global_filtered_paginated() {
+        let (store, _temp) = create_test_store();
+        let task_1 = Uuid::new_v4();
+        let task_2 = Uuid::new_v4();
+
+        let mut run_1 = Run::new(
+            task_1,
+            AgentType::OpenCode,
+            "Task one".to_string(),
+            "main".to_string(),
+        );
+        run_1.metadata.org_id = Some("org-a".to_string());
+        run_1.metadata.host_id = Some("host-1".to_string());
+        run_1.mark_failed("boom".to_string());
+
+        let mut run_2 = Run::new(
+            task_2,
+            AgentType::OpenCode,
+            "Task two".to_string(),
+            "main".to_string(),
+        );
+        run_2.metadata.org_id = Some("org-b".to_string());
+        run_2.metadata.host_id = Some("host-2".to_string());
+        run_2.mark_started();
+
+        store.save_run(&run_1).unwrap();
+        store.save_run(&run_2).unwrap();
+
+        let (all_runs, has_more) = store
+            .list_runs_global_filtered_paginated(0, 10, None, None, None, None)
+            .unwrap();
+        assert_eq!(all_runs.len(), 2);
+        assert!(!has_more);
+
+        let (failed, _) = store
+            .list_runs_global_filtered_paginated(0, 10, Some("failed"), None, None, None)
+            .unwrap();
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].id, run_1.id);
+
+        let (org_b, _) = store
+            .list_runs_global_filtered_paginated(0, 10, None, Some("org-b"), None, None)
+            .unwrap();
+        assert_eq!(org_b.len(), 1);
+        assert_eq!(org_b[0].id, run_2.id);
+
+        let (host_1, _) = store
+            .list_runs_global_filtered_paginated(0, 10, None, None, Some("host-1"), None)
+            .unwrap();
+        assert_eq!(host_1.len(), 1);
+        assert_eq!(host_1[0].id, run_1.id);
+    }
+
+    #[test]
+    fn test_load_events_by_run_id_filtered_paginated() {
+        let (store, _temp) = create_test_store();
+        let task_id = Uuid::new_v4();
+        let run_id = Uuid::new_v4();
+
+        let run = Run::with_id(
+            run_id,
+            task_id,
+            AgentType::OpenCode,
+            "Test".to_string(),
+            "main".to_string(),
+        );
+        store.save_run(&run).unwrap();
+
+        let event = ExecutionEvent::agent_event(
+            run_id,
+            task_id,
+            AgentEvent::Message {
+                content: "Hello".to_string(),
+            },
+        );
+        store.append_event(task_id, run_id, &event).unwrap();
+
+        let loaded = store
+            .load_events_by_run_id_filtered_paginated(
+                run_id,
+                0,
+                20,
+                Some("agent_event"),
+                Some("message"),
+            )
+            .unwrap()
+            .expect("run should be found");
+
+        assert_eq!(loaded.0.id, run_id);
+        assert_eq!(loaded.1.len(), 1);
+        assert!(!loaded.2);
     }
 
     #[test]

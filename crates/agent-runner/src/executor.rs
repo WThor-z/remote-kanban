@@ -123,11 +123,8 @@ pub struct TaskExecutor {
 impl TaskExecutor {
     /// Create a new task executor
     pub async fn new(config: ExecutorConfig) -> Result<Self> {
-        let worktree_manager = WorktreeManager::with_config(
-            &config.repo_path,
-            config.worktree_config.clone(),
-        )
-        .await?;
+        let worktree_manager =
+            WorktreeManager::with_config(&config.repo_path, config.worktree_config.clone()).await?;
 
         let worker_url = std::env::var("AGENT_WORKER_URL")
             .unwrap_or_else(|_| "http://localhost:4000".to_string());
@@ -193,11 +190,18 @@ impl TaskExecutor {
         );
 
         let session_id = session.id;
-        info!("Creating execution session {} for task {}", session_id, request.task_id);
+        info!(
+            "Creating execution session {} for task {}",
+            session_id, request.task_id
+        );
 
         // Update status
-        session.update_status(ExecutionStatus::CreatingWorktree).await;
-        session.emit_progress("Creating isolated worktree...".to_string(), Some(0.1)).await;
+        session
+            .update_status(ExecutionStatus::CreatingWorktree)
+            .await;
+        session
+            .emit_progress("Creating isolated worktree...".to_string(), Some(0.1))
+            .await;
 
         // Create worktree
         let task_id_str = request.task_id.to_string();
@@ -212,14 +216,17 @@ impl TaskExecutor {
         );
 
         session.set_worktree(worktree);
-        session.emit_progress("Worktree created, starting agent...".to_string(), Some(0.3)).await;
+        session
+            .emit_progress("Worktree created, starting agent...".to_string(), Some(0.3))
+            .await;
 
-        let worktree = session
-            .worktree
-            .as_ref()
-            .ok_or_else(|| ExecutorError::WorktreePathNotFound {
-                path: PathBuf::from("(not set)"),
-            })?;
+        let worktree =
+            session
+                .worktree
+                .as_ref()
+                .ok_or_else(|| ExecutorError::WorktreePathNotFound {
+                    path: PathBuf::from("(not set)"),
+                })?;
 
         let worktree_path = worktree
             .path
@@ -256,9 +263,9 @@ impl TaskExecutor {
         }
 
         // Take the event receiver before moving session into Arc
-        let event_rx = session.take_event_receiver().ok_or_else(|| {
-            ExecutorError::spawn_failed("Failed to get event receiver")
-        })?;
+        let event_rx = session
+            .take_event_receiver()
+            .ok_or_else(|| ExecutorError::spawn_failed("Failed to get event receiver"))?;
 
         let (forward_tx, forward_rx) = mpsc::channel(1000);
 
@@ -329,7 +336,10 @@ impl TaskExecutor {
                 };
 
                 if let Err(e) = run_store.save_run(&run_snapshot) {
-                    warn!("Failed to persist run metadata for session {}: {}", session_id, e);
+                    warn!(
+                        "Failed to persist run metadata for session {}: {}",
+                        session_id, e
+                    );
                 }
 
                 let should_close = matches!(event.event, ExecutionEventType::SessionEnded { .. });
@@ -356,7 +366,10 @@ impl TaskExecutor {
     }
 
     /// Get a session by task ID
-    pub async fn get_session_by_task(&self, task_id: Uuid) -> Option<Arc<RwLock<ExecutionSession>>> {
+    pub async fn get_session_by_task(
+        &self,
+        task_id: Uuid,
+    ) -> Option<Arc<RwLock<ExecutionSession>>> {
         let task_sessions = self.task_sessions.read().await;
         if let Some(session_id) = task_sessions.get(&task_id) {
             let sessions = self.sessions.read().await;
@@ -392,12 +405,12 @@ impl TaskExecutor {
 
     /// Cancel a session
     pub async fn cancel_session(&self, session_id: Uuid) -> Result<()> {
-        let session = self
-            .get_session(session_id)
-            .await
-            .ok_or_else(|| ExecutorError::SessionNotFound {
-                session_id: session_id.to_string(),
-            })?;
+        let session =
+            self.get_session(session_id)
+                .await
+                .ok_or_else(|| ExecutorError::SessionNotFound {
+                    session_id: session_id.to_string(),
+                })?;
 
         let task_id = {
             let session = session.read().await;
@@ -428,12 +441,12 @@ impl TaskExecutor {
 
     /// Cleanup a session's worktree
     pub async fn cleanup_session(&self, session_id: Uuid, force: bool) -> Result<()> {
-        let session = self
-            .get_session(session_id)
-            .await
-            .ok_or_else(|| ExecutorError::SessionNotFound {
-                session_id: session_id.to_string(),
-            })?;
+        let session =
+            self.get_session(session_id)
+                .await
+                .ok_or_else(|| ExecutorError::SessionNotFound {
+                    session_id: session_id.to_string(),
+                })?;
 
         let session = session.read().await;
         let state = session.state().await;
@@ -465,12 +478,11 @@ impl TaskExecutor {
 
     /// Send input to a running session
     pub async fn send_input(&self, task_id: Uuid, content: String) -> Result<()> {
-        let session = self
-            .get_session_by_task(task_id)
-            .await
-            .ok_or_else(|| ExecutorError::SessionNotFoundForTask {
+        let session = self.get_session_by_task(task_id).await.ok_or_else(|| {
+            ExecutorError::SessionNotFoundForTask {
                 task_id: task_id.to_string(),
-            })?;
+            }
+        })?;
 
         let session = session.read().await;
         let state = session.state().await;
@@ -491,39 +503,39 @@ fn update_run_from_event(run: &mut Run, event: &ExecutionEvent) {
         ExecutionEventType::StatusChanged { new_status, .. } => {
             run.status = *new_status;
         }
-        ExecutionEventType::AgentEvent { event: agent_event } => {
-            match agent_event {
-                AgentEvent::Thinking { .. } => {
-                    run.metadata.thinking_count = run.metadata.thinking_count.saturating_add(1);
-                }
-                AgentEvent::Command { .. } => {
-                    run.metadata.commands_executed =
-                        run.metadata.commands_executed.saturating_add(1);
-                }
-                AgentEvent::FileChange { path, .. } => {
-                    if !run.metadata.files_modified.contains(path) {
-                        run.metadata.files_modified.push(path.clone());
-                    }
-                }
-                AgentEvent::ToolCall { .. } => {
-                    run.metadata.tools_called = run.metadata.tools_called.saturating_add(1);
-                }
-                AgentEvent::Message { .. } => {
-                    run.metadata.message_count = run.metadata.message_count.saturating_add(1);
-                }
-                AgentEvent::Error { message, .. } => {
-                    run.metadata.error_count = run.metadata.error_count.saturating_add(1);
-                    run.error = Some(message.clone());
-                }
-                AgentEvent::Completed { summary, .. } => {
-                    if let Some(summary) = summary {
-                        run.summary = Some(summary.clone());
-                    }
-                }
-                AgentEvent::RawOutput { .. } => {}
+        ExecutionEventType::AgentEvent { event: agent_event } => match agent_event {
+            AgentEvent::Thinking { .. } => {
+                run.metadata.thinking_count = run.metadata.thinking_count.saturating_add(1);
             }
-        }
-        ExecutionEventType::SessionStarted { worktree_path, branch } => {
+            AgentEvent::Command { .. } => {
+                run.metadata.commands_executed = run.metadata.commands_executed.saturating_add(1);
+            }
+            AgentEvent::FileChange { path, .. } => {
+                if !run.metadata.files_modified.contains(path) {
+                    run.metadata.files_modified.push(path.clone());
+                }
+            }
+            AgentEvent::ToolCall { .. } => {
+                run.metadata.tools_called = run.metadata.tools_called.saturating_add(1);
+            }
+            AgentEvent::Message { .. } => {
+                run.metadata.message_count = run.metadata.message_count.saturating_add(1);
+            }
+            AgentEvent::Error { message, .. } => {
+                run.metadata.error_count = run.metadata.error_count.saturating_add(1);
+                run.error = Some(message.clone());
+            }
+            AgentEvent::Completed { summary, .. } => {
+                if let Some(summary) = summary {
+                    run.summary = Some(summary.clone());
+                }
+            }
+            AgentEvent::RawOutput { .. } => {}
+        },
+        ExecutionEventType::SessionStarted {
+            worktree_path,
+            branch,
+        } => {
             run.started_at = Some(event.timestamp);
             if !worktree_path.is_empty() {
                 run.worktree_path = Some(PathBuf::from(worktree_path));
@@ -532,7 +544,10 @@ fn update_run_from_event(run: &mut Run, event: &ExecutionEvent) {
                 run.worktree_branch = Some(branch.clone());
             }
         }
-        ExecutionEventType::SessionEnded { status, duration_ms } => {
+        ExecutionEventType::SessionEnded {
+            status,
+            duration_ms,
+        } => {
             run.ended_at = Some(event.timestamp);
             run.status = *status;
             run.duration_ms = Some(*duration_ms);
@@ -555,8 +570,11 @@ async fn run_session(
     // Get info needed for execution
     let (task_id, prompt, worktree_path, agent_type, event_tx) = {
         let session = session.read().await;
-        let worktree_path = session.worktree_path()
-            .ok_or(ExecutorError::WorktreePathNotFound { path: PathBuf::from("") })?
+        let worktree_path = session
+            .worktree_path()
+            .ok_or(ExecutorError::WorktreePathNotFound {
+                path: PathBuf::from(""),
+            })?
             .clone();
         (
             session.task_id,
@@ -569,7 +587,13 @@ async fn run_session(
 
     // Execute via Worker
     match worker_client
-        .execute(task_id.to_string(), prompt, worktree_path, agent_type, event_tx)
+        .execute(
+            task_id.to_string(),
+            prompt,
+            worktree_path,
+            agent_type,
+            event_tx,
+        )
         .await
     {
         Ok(_) => Ok(0),
@@ -684,7 +708,9 @@ mod tests {
         let result = executor.send_input(task_id, "hello".to_string()).await;
 
         match result {
-            Err(ExecutorError::SessionNotFoundForTask { task_id: err_task_id }) => {
+            Err(ExecutorError::SessionNotFoundForTask {
+                task_id: err_task_id,
+            }) => {
                 assert_eq!(err_task_id, task_id.to_string());
             }
             other => panic!("Unexpected result: {:?}", other),
@@ -711,13 +737,23 @@ mod tests {
         let session_id = session.id;
         let session = Arc::new(RwLock::new(session));
 
-        executor.sessions.write().await.insert(session_id, Arc::clone(&session));
-        executor.task_sessions.write().await.insert(task_id, session_id);
+        executor
+            .sessions
+            .write()
+            .await
+            .insert(session_id, Arc::clone(&session));
+        executor
+            .task_sessions
+            .write()
+            .await
+            .insert(task_id, session_id);
 
         let result = executor.send_input(task_id, "input".to_string()).await;
 
         match result {
-            Err(ExecutorError::SessionNotRunning { session_id: err_session_id }) => {
+            Err(ExecutorError::SessionNotRunning {
+                session_id: err_session_id,
+            }) => {
                 assert_eq!(err_session_id, session_id.to_string());
             }
             other => panic!("Unexpected result: {:?}", other),
@@ -753,10 +789,21 @@ mod tests {
 
         let session_id = session.id;
         let session = Arc::new(RwLock::new(session));
-        executor.sessions.write().await.insert(session_id, Arc::clone(&session));
-        executor.task_sessions.write().await.insert(task_id, session_id);
+        executor
+            .sessions
+            .write()
+            .await
+            .insert(session_id, Arc::clone(&session));
+        executor
+            .task_sessions
+            .write()
+            .await
+            .insert(task_id, session_id);
 
-        executor.send_input(task_id, "ping".to_string()).await.expect("send input");
+        executor
+            .send_input(task_id, "ping".to_string())
+            .await
+            .expect("send input");
 
         let inputs = mock_worker.inputs.lock().await;
         assert_eq!(inputs.len(), 1);

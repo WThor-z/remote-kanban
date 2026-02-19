@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::sync::RwLock;
@@ -54,6 +54,9 @@ where
 fn normalize_settings(mut settings: MemorySettings) -> MemorySettings {
     settings.token_budget = settings.token_budget.clamp(200, 6000);
     settings.retrieval_top_k = settings.retrieval_top_k.clamp(1, 50);
+    settings.recency_half_life_hours = settings.recency_half_life_hours.clamp(1, 24 * 30);
+    settings.hit_count_weight = settings.hit_count_weight.clamp(0.0, 4.0);
+    settings.pinned_boost = settings.pinned_boost.clamp(0.0, 10.0);
     settings
 }
 
@@ -83,6 +86,18 @@ fn apply_settings_patch(current: &MemorySettings, patch: &MemorySettingsPatch) -
     if let Some(value) = patch.llm_extract_enabled {
         next.llm_extract_enabled = value;
     }
+    if let Some(value) = patch.recency_half_life_hours {
+        next.recency_half_life_hours = value;
+    }
+    if let Some(value) = patch.hit_count_weight {
+        next.hit_count_weight = value;
+    }
+    if let Some(value) = patch.pinned_boost {
+        next.pinned_boost = value;
+    }
+    if let Some(value) = patch.dedupe_enabled {
+        next.dedupe_enabled = value;
+    }
     normalize_settings(next)
 }
 
@@ -99,6 +114,28 @@ fn trim_to_none(value: Option<String>) -> Option<String> {
 
 fn now_iso() -> String {
     Utc::now().to_rfc3339()
+}
+
+fn parse_iso(raw: &str) -> Option<DateTime<Utc>> {
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+}
+
+fn score_memory_item(item: &MemoryItem, settings: &MemorySettings, now: &DateTime<Utc>) -> f32 {
+    let updated_at = parse_iso(&item.updated_at).unwrap_or(*now);
+    let age_hours = (*now - updated_at).num_seconds().max(0) as f32 / 3600.0;
+    let half_life = settings.recency_half_life_hours.max(1) as f32;
+    let recency_score = 2_f32.powf(-age_hours / half_life);
+    let hit_score = (item.hit_count as f32 + 1.0).ln() * settings.hit_count_weight;
+    let pinned_score = if item.pinned {
+        settings.pinned_boost
+    } else {
+        0.0
+    };
+    let enabled_penalty = if item.enabled { 0.0 } else { -1.0 };
+
+    item.confidence.clamp(0.0, 1.0) + recency_score + hit_score + pinned_score + enabled_penalty
 }
 
 impl MemoryStore {
@@ -152,7 +189,10 @@ impl MemoryStore {
         self.state.read().await.settings.clone()
     }
 
-    pub async fn update_settings(&self, patch: MemorySettingsPatch) -> Result<MemorySettings, String> {
+    pub async fn update_settings(
+        &self,
+        patch: MemorySettingsPatch,
+    ) -> Result<MemorySettings, String> {
         let mut state = self.state.write().await;
         let next = apply_settings_patch(&state.settings, &patch);
         self.persist_settings(&next).await?;
@@ -161,7 +201,10 @@ impl MemoryStore {
     }
 
     pub async fn list_items(&self, query: &MemoryListQuery) -> Vec<MemoryItem> {
-        let mut items = self.state.read().await.items.clone();
+        let state = self.state.read().await;
+        let settings = state.settings.clone();
+        let mut items = state.items.clone();
+        drop(state);
 
         if let Some(host_id) = trim_to_none(query.host_id.clone()) {
             items.retain(|item| item.host_id == host_id);
@@ -192,11 +235,14 @@ impl MemoryStore {
             });
         }
 
+        let now = Utc::now();
         items.sort_by(|left, right| {
-            if left.pinned != right.pinned {
-                return right.pinned.cmp(&left.pinned);
-            }
-            right.updated_at.cmp(&left.updated_at)
+            let left_score = score_memory_item(left, &settings, &now);
+            let right_score = score_memory_item(right, &settings, &now);
+            right_score
+                .partial_cmp(&left_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| right.updated_at.cmp(&left.updated_at))
         });
 
         let offset = query.offset.unwrap_or(0);
@@ -220,11 +266,47 @@ impl MemoryStore {
             return Err("Memory content is required".to_string());
         }
 
+        let project_id = trim_to_none(input.project_id.clone());
+        let source_task_id = trim_to_none(input.source_task_id.clone());
+        let normalized_content = content.to_lowercase();
         let now = now_iso();
+        let mut state = self.state.write().await;
+
+        if state.settings.dedupe_enabled {
+            if let Some(existing) = state.items.iter_mut().find(|item| {
+                item.host_id == input.host_id
+                    && item.project_id == project_id
+                    && item.scope == input.scope
+                    && item.kind == input.kind
+                    && item
+                        .content
+                        .trim()
+                        .eq_ignore_ascii_case(&normalized_content)
+            }) {
+                existing.updated_at = now.clone();
+                existing.last_used_at = Some(now.clone());
+                existing.hit_count = existing.hit_count.saturating_add(1);
+                if let Some(task_id) = source_task_id {
+                    existing.source_task_id = Some(task_id);
+                }
+                if !input.tags.is_empty() {
+                    for tag in &input.tags {
+                        if !existing.tags.contains(tag) {
+                            existing.tags.push(tag.clone());
+                        }
+                    }
+                }
+
+                let deduped = existing.clone();
+                self.persist_items(&state.items).await?;
+                return Ok(deduped);
+            }
+        }
+
         let item = MemoryItem {
             id: Uuid::new_v4().to_string(),
             host_id: input.host_id,
-            project_id: trim_to_none(input.project_id),
+            project_id,
             scope: input.scope,
             kind: input.kind,
             content,
@@ -233,14 +315,13 @@ impl MemoryStore {
             pinned: input.pinned.unwrap_or(false),
             enabled: input.enabled.unwrap_or(true),
             source: MemorySource::Manual,
-            source_task_id: trim_to_none(input.source_task_id),
+            source_task_id,
             created_at: now.clone(),
             updated_at: now,
             last_used_at: None,
             hit_count: 0,
         };
 
-        let mut state = self.state.write().await;
         state.items.push(item.clone());
         self.persist_items(&state.items).await?;
         Ok(item)
@@ -323,7 +404,8 @@ impl MemoryStore {
         if items.is_empty() {
             return Ok(0);
         }
-        let ids: std::collections::HashSet<String> = items.iter().map(|item| item.id.clone()).collect();
+        let ids: std::collections::HashSet<String> =
+            items.iter().map(|item| item.id.clone()).collect();
         let mut state = self.state.write().await;
         let before = state.items.len();
         state.items.retain(|item| !ids.contains(&item.id));

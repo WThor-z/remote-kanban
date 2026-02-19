@@ -145,7 +145,9 @@ pub async fn on_connect(socket: SocketRef, State(_state): State<SocketState>) {
 
     socket.on(
         "kanban:create",
-        |socket: SocketRef, State(state): State<SocketState>, Data(data): Data<CreateTaskPayload>| async move {
+        |socket: SocketRef,
+         State(state): State<SocketState>,
+         Data(data): Data<CreateTaskPayload>| async move {
             handle_create_task(socket, state, data).await;
         },
     );
@@ -159,7 +161,9 @@ pub async fn on_connect(socket: SocketRef, State(_state): State<SocketState>) {
 
     socket.on(
         "kanban:delete",
-        |socket: SocketRef, State(state): State<SocketState>, Data(data): Data<DeleteTaskPayload>| async move {
+        |socket: SocketRef,
+         State(state): State<SocketState>,
+         Data(data): Data<DeleteTaskPayload>| async move {
             handle_delete_task(socket, state, data).await;
         },
     );
@@ -185,7 +189,9 @@ pub async fn on_connect(socket: SocketRef, State(_state): State<SocketState>) {
 
     socket.on(
         "task:execute",
-        |socket: SocketRef, State(state): State<SocketState>, Data(data): Data<TaskHistoryPayload>| async move {
+        |socket: SocketRef,
+         State(state): State<SocketState>,
+         Data(data): Data<TaskHistoryPayload>| async move {
             let task_id = data.task_id.clone();
             info!("Task execution requested: {}", task_id);
 
@@ -194,22 +200,32 @@ pub async fn on_connect(socket: SocketRef, State(_state): State<SocketState>) {
                 let sessions = state.sessions.read().await;
                 if sessions.contains_key(&task_id) {
                     warn!("Task {} is already running", task_id);
-                    let _ = socket.emit("task:error", &TaskErrorPayload {
-                        task_id: task_id.clone(),
-                        error: "Task is already running".to_string(),
-                    });
+                    let _ = socket.emit(
+                        "task:error",
+                        &TaskErrorPayload {
+                            task_id: task_id.clone(),
+                            error: "Task is already running".to_string(),
+                        },
+                    );
                     return;
                 }
             }
 
             // Send starting status
-            let _ = socket.emit("task:status", &TaskStatusPayload {
-                task_id: task_id.clone(),
-                status: "starting".to_string(),
-            });
+            let _ = socket.emit(
+                "task:status",
+                &TaskStatusPayload {
+                    task_id: task_id.clone(),
+                    status: "starting".to_string(),
+                },
+            );
 
             // Move task to "Doing" column immediately
-            if let Err(e) = state.kanban_store.move_task(&task_id, KanbanTaskStatus::Doing, None).await {
+            if let Err(e) = state
+                .kanban_store
+                .move_task(&task_id, KanbanTaskStatus::Doing, None)
+                .await
+            {
                 warn!("Failed to move task to doing: {}", e);
             } else {
                 // Broadcast kanban sync to all clients
@@ -221,13 +237,19 @@ pub async fn on_connect(socket: SocketRef, State(_state): State<SocketState>) {
             // Get task info from kanban store
             let task_opt = state.kanban_store.get_task(&task_id).await;
             let (title, description) = match task_opt {
-                Some(task) => (task.title.clone(), task.description.clone().unwrap_or_default()),
+                Some(task) => (
+                    task.title.clone(),
+                    task.description.clone().unwrap_or_default(),
+                ),
                 None => {
                     warn!("Task not found: {}", task_id);
-                    let _ = socket.emit("task:error", &TaskErrorPayload {
-                        task_id: task_id.clone(),
-                        error: "Task not found".to_string(),
-                    });
+                    let _ = socket.emit(
+                        "task:error",
+                        &TaskErrorPayload {
+                            task_id: task_id.clone(),
+                            error: "Task not found".to_string(),
+                        },
+                    );
                     return;
                 }
             };
@@ -270,10 +292,13 @@ pub async fn on_connect(socket: SocketRef, State(_state): State<SocketState>) {
                 };
 
                 // Update status to running
-                let _ = socket_clone.emit("task:status", &TaskStatusPayload {
-                    task_id: task_id_clone.clone(),
-                    status: "running".to_string(),
-                });
+                let _ = socket_clone.emit(
+                    "task:status",
+                    &TaskStatusPayload {
+                        task_id: task_id_clone.clone(),
+                        status: "running".to_string(),
+                    },
+                );
                 info!("Task {} status: running", task_id_clone);
 
                 // Spawn event forwarding task
@@ -284,30 +309,36 @@ pub async fn on_connect(socket: SocketRef, State(_state): State<SocketState>) {
                 let event_handle = tokio::spawn(async move {
                     let mut message_counter = 0u64;
                     info!("Event forwarding task started for {}", task_id_for_events);
-                    
+
                     while let Ok(event) = rx.recv().await {
                         info!("Received OpenCode event: {}", event.event_type);
-                        
+
                         // Convert OpenCode events to task messages
                         let content = match event.event_type.as_str() {
                             // Text streaming from assistant
                             "message.part.delta" => {
                                 // Extract text delta
-                                event.properties.get("part")
+                                event
+                                    .properties
+                                    .get("part")
                                     .and_then(|p| p.get("text"))
                                     .and_then(|t| t.as_str())
                                     .map(|s| s.to_string())
                             }
                             // Tool calls
                             "tool.start" => {
-                                let tool_name = event.properties.get("tool")
+                                let tool_name = event
+                                    .properties
+                                    .get("tool")
                                     .and_then(|t| t.get("name"))
                                     .and_then(|n| n.as_str())
                                     .unwrap_or("unknown");
                                 Some(format!("[Tool] Starting: {}", tool_name))
                             }
                             "tool.end" => {
-                                let tool_name = event.properties.get("tool")
+                                let tool_name = event
+                                    .properties
+                                    .get("tool")
                                     .and_then(|t| t.get("name"))
                                     .and_then(|n| n.as_str())
                                     .unwrap_or("unknown");
@@ -315,44 +346,54 @@ pub async fn on_connect(socket: SocketRef, State(_state): State<SocketState>) {
                             }
                             // File operations
                             "file.write" | "file.edit" => {
-                                let path = event.properties.get("path")
+                                let path = event
+                                    .properties
+                                    .get("path")
                                     .and_then(|p| p.as_str())
                                     .unwrap_or("unknown");
                                 Some(format!("[File] Modified: {}", path))
                             }
                             "file.read" => {
-                                let path = event.properties.get("path")
+                                let path = event
+                                    .properties
+                                    .get("path")
                                     .and_then(|p| p.as_str())
                                     .unwrap_or("unknown");
                                 Some(format!("[File] Read: {}", path))
                             }
                             // Bash commands
                             "bash.start" => {
-                                let cmd = event.properties.get("command")
+                                let cmd = event
+                                    .properties
+                                    .get("command")
                                     .and_then(|c| c.as_str())
                                     .unwrap_or("...");
                                 Some(format!("[Bash] $ {}", cmd))
                             }
-                            "bash.output" => {
-                                event.properties.get("output")
-                                    .and_then(|o| o.as_str())
-                                    .map(|s| format!("{}", s))
-                            }
+                            "bash.output" => event
+                                .properties
+                                .get("output")
+                                .and_then(|o| o.as_str())
+                                .map(|s| format!("{}", s)),
                             // Claude thinking
-                            "assistant.thinking" => {
-                                event.properties.get("thinking")
-                                    .and_then(|t| t.as_str())
-                                    .map(|s| format!("[Thinking] {}", s))
-                            }
+                            "assistant.thinking" => event
+                                .properties
+                                .get("thinking")
+                                .and_then(|t| t.as_str())
+                                .map(|s| format!("[Thinking] {}", s)),
                             // Message events - try to extract content
                             "message.created" => {
                                 // Extract message content if available
-                                event.properties.get("message")
+                                event
+                                    .properties
+                                    .get("message")
                                     .and_then(|m| m.get("content"))
                                     .and_then(|c| {
                                         if let Some(arr) = c.as_array() {
                                             arr.iter()
-                                                .filter_map(|part| part.get("text").and_then(|t| t.as_str()))
+                                                .filter_map(|part| {
+                                                    part.get("text").and_then(|t| t.as_str())
+                                                })
                                                 .collect::<Vec<_>>()
                                                 .join("")
                                                 .into()
@@ -364,28 +405,33 @@ pub async fn on_connect(socket: SocketRef, State(_state): State<SocketState>) {
                             }
                             "message.updated" => None,
                             // Session events
-                            "session.created" => {
-                                Some("Session created".to_string())
-                            }
-                            "session.idle" => {
-                                Some("Task completed".to_string())
-                            }
+                            "session.created" => Some("Session created".to_string()),
+                            "session.idle" => Some("Task completed".to_string()),
                             "session.error" => {
-                                let error_msg = event.properties.get("error")
+                                let error_msg = event
+                                    .properties
+                                    .get("error")
                                     .and_then(|e| e.as_str())
                                     .unwrap_or("Unknown error");
                                 Some(format!("Error: {}", error_msg))
                             }
                             _ => {
                                 // Log other event types for debugging
-                                info!("Unhandled event type: {} - {:?}", event.event_type, event.properties);
+                                info!(
+                                    "Unhandled event type: {} - {:?}",
+                                    event.event_type, event.properties
+                                );
                                 None
                             }
                         };
 
                         if let Some(text) = content {
                             message_counter += 1;
-                            info!("Sending task:message #{}: {}", message_counter, &text[..text.len().min(50)]);
+                            info!(
+                                "Sending task:message #{}: {}",
+                                message_counter,
+                                &text[..text.len().min(50)]
+                            );
                             let msg = TaskMessagePayload {
                                 task_id: task_id_for_events.clone(),
                                 message: TaskMessage {
@@ -395,7 +441,8 @@ pub async fn on_connect(socket: SocketRef, State(_state): State<SocketState>) {
                                     timestamp: std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
                                         .unwrap()
-                                        .as_millis() as u64,
+                                        .as_millis()
+                                        as u64,
                                 },
                             };
                             let _ = socket_for_events.emit("task:message", &msg);
@@ -418,13 +465,23 @@ pub async fn on_connect(socket: SocketRef, State(_state): State<SocketState>) {
                 match result {
                     Ok(_) => {
                         info!("Task {} completed successfully", task_id_clone);
-                        let _ = socket_clone.emit("task:status", &TaskStatusPayload {
-                            task_id: task_id_clone.clone(),
-                            status: "completed".to_string(),
-                        });
+                        let _ = socket_clone.emit(
+                            "task:status",
+                            &TaskStatusPayload {
+                                task_id: task_id_clone.clone(),
+                                status: "completed".to_string(),
+                            },
+                        );
 
                         // Move task to "done" column
-                        if let Err(e) = kanban_store.move_task(&task_id_clone, vk_core::kanban::KanbanTaskStatus::Done, None).await {
+                        if let Err(e) = kanban_store
+                            .move_task(
+                                &task_id_clone,
+                                vk_core::kanban::KanbanTaskStatus::Done,
+                                None,
+                            )
+                            .await
+                        {
                             warn!("Failed to move task to done: {}", e);
                         } else {
                             // Broadcast kanban sync
@@ -435,14 +492,20 @@ pub async fn on_connect(socket: SocketRef, State(_state): State<SocketState>) {
                     }
                     Err(e) => {
                         error!("Task {} failed: {}", task_id_clone, e);
-                        let _ = socket_clone.emit("task:status", &TaskStatusPayload {
-                            task_id: task_id_clone.clone(),
-                            status: "failed".to_string(),
-                        });
-                        let _ = socket_clone.emit("task:error", &TaskErrorPayload {
-                            task_id: task_id_clone.clone(),
-                            error: e.to_string(),
-                        });
+                        let _ = socket_clone.emit(
+                            "task:status",
+                            &TaskStatusPayload {
+                                task_id: task_id_clone.clone(),
+                                status: "failed".to_string(),
+                            },
+                        );
+                        let _ = socket_clone.emit(
+                            "task:error",
+                            &TaskErrorPayload {
+                                task_id: task_id_clone.clone(),
+                                error: e.to_string(),
+                            },
+                        );
                     }
                 }
 
@@ -529,16 +592,18 @@ async fn handle_create_task(socket: SocketRef, state: SocketState, data: CreateT
         }
         Err(e) => {
             warn!("Failed to create task: {}", e);
-            let _ = socket.emit("kanban:error", &ErrorPayload { message: e.to_string() });
+            let _ = socket.emit(
+                "kanban:error",
+                &ErrorPayload {
+                    message: e.to_string(),
+                },
+            );
         }
     }
 }
 
 async fn handle_move_task(socket: SocketRef, state: SocketState, data: MoveTaskPayload) {
-    info!(
-        "Moving task {} to {:?}",
-        data.task_id, data.target_status
-    );
+    info!("Moving task {} to {:?}", data.task_id, data.target_status);
 
     match state
         .kanban_store
@@ -559,7 +624,12 @@ async fn handle_move_task(socket: SocketRef, state: SocketState, data: MoveTaskP
         }
         Err(e) => {
             warn!("Failed to move task: {}", e);
-            let _ = socket.emit("kanban:error", &ErrorPayload { message: e.to_string() });
+            let _ = socket.emit(
+                "kanban:error",
+                &ErrorPayload {
+                    message: e.to_string(),
+                },
+            );
         }
     }
 }
@@ -576,7 +646,7 @@ async fn handle_delete_task(socket: SocketRef, state: SocketState, data: DeleteT
                     warn!("Failed to delete from task store: {}", e);
                 }
             }
-            
+
             let board_state = state.kanban_store.get_state().await;
             broadcast_sync(&socket, &board_state);
         }
@@ -590,7 +660,12 @@ async fn handle_delete_task(socket: SocketRef, state: SocketState, data: DeleteT
         }
         Err(e) => {
             warn!("Failed to delete task: {}", e);
-            let _ = socket.emit("kanban:error", &ErrorPayload { message: e.to_string() });
+            let _ = socket.emit(
+                "kanban:error",
+                &ErrorPayload {
+                    message: e.to_string(),
+                },
+            );
         }
     }
 }

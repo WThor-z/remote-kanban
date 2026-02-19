@@ -139,7 +139,9 @@ mod tests {
         // Create initial commit
         let test_file = dir.path().join("test.txt");
         tokio::fs::write(&test_file, "test").await.unwrap();
-        git_command_checked(dir.path(), &["add", "."]).await.unwrap();
+        git_command_checked(dir.path(), &["add", "."])
+            .await
+            .unwrap();
         git_command_checked(dir.path(), &["commit", "-m", "Initial commit"])
             .await
             .unwrap();

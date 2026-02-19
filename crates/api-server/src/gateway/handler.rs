@@ -6,13 +6,17 @@ use axum::{
         Query, State,
     },
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
-    response::Response,
     response::IntoResponse,
+    response::Response,
 };
 use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
+
+use crate::auth::resolve_host_claims;
+use crate::feature_flags::feature_multi_tenant;
+use crate::state::AppState;
 
 use super::manager::GatewayManager;
 use super::protocol::*;
@@ -50,10 +54,48 @@ pub struct WsQuery {
 pub async fn gateway_ws_handler(
     ws: WebSocketUpgrade,
     Query(query): Query<WsQuery>,
-    State(manager): State<Arc<GatewayManager>>,
+    State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    if !is_gateway_authorized(&headers, &expected_gateway_auth_token()) {
+    if feature_multi_tenant() {
+        let claims = match resolve_host_claims(&headers) {
+            Ok(claims) => claims,
+            Err(err) => {
+                warn!(
+                    "Rejected gateway connection due to invalid host JWT for {}: {}",
+                    query.host_id, err
+                );
+                return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+            }
+        };
+
+        if claims.host_id != query.host_id {
+            warn!(
+                "Rejected gateway connection due to host mismatch: query={}, token={}",
+                query.host_id, claims.host_id
+            );
+            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+        }
+
+        let enrollment = state
+            .auth_store()
+            .get_host_enrollment_in_org(&claims.org_id, &claims.host_id)
+            .await;
+        let Some(enrollment) = enrollment else {
+            warn!(
+                "Rejected gateway connection: host {} not enrolled in org {}",
+                claims.host_id, claims.org_id
+            );
+            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+        };
+        if !enrollment.enabled || enrollment.token_version != claims.token_version {
+            warn!(
+                "Rejected gateway connection: host {} token version mismatch or disabled",
+                claims.host_id
+            );
+            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+        }
+    } else if !is_gateway_authorized(&headers, &expected_gateway_auth_token()) {
         warn!(
             "Rejected gateway connection due to invalid token: {}",
             query.host_id
@@ -61,19 +103,19 @@ pub async fn gateway_ws_handler(
         return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
     }
 
-    info!("New gateway connection request from host: {}", query.host_id);
+    info!(
+        "New gateway connection request from host: {}",
+        query.host_id
+    );
+    let manager = state.gateway_manager_arc();
     ws.on_upgrade(move |socket| handle_gateway_socket(socket, query.host_id, manager))
         .into_response()
 }
 
 /// Handle an individual gateway WebSocket connection
-async fn handle_gateway_socket(
-    socket: WebSocket,
-    host_id: String,
-    manager: Arc<GatewayManager>,
-) {
+async fn handle_gateway_socket(socket: WebSocket, host_id: String, manager: Arc<GatewayManager>) {
     let (mut ws_sender, mut ws_receiver) = socket.split();
-    
+
     // Channel for sending messages to this gateway
     let (tx, mut rx) = mpsc::channel::<ServerToGatewayMessage>(100);
 
@@ -163,11 +205,11 @@ async fn handle_gateway_message(
                     host_id, msg_host_id
                 );
             }
-            
+
             let ok = manager
                 .register_host(msg_host_id, capabilities, tx.clone())
                 .await;
-            
+
             let _ = tx
                 .send(ServerToGatewayMessage::Registered { ok, error: None })
                 .await;
@@ -242,19 +284,17 @@ pub fn start_heartbeat_checker(manager: Arc<GatewayManager>) {
 }
 
 /// List all connected hosts (for REST API)
-pub async fn list_hosts_handler(
-    State(manager): State<Arc<GatewayManager>>,
-) -> impl IntoResponse {
-    let hosts = manager.list_hosts().await;
+pub async fn list_hosts_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let hosts = state.gateway_manager().list_hosts().await;
     axum::Json(hosts)
 }
 
 /// Get available models from a specific gateway host
 pub async fn get_host_models_handler(
-    State(manager): State<Arc<GatewayManager>>,
+    State(state): State<AppState>,
     axum::extract::Path(host_id): axum::extract::Path<String>,
 ) -> impl IntoResponse {
-    match manager.request_models(&host_id).await {
+    match state.gateway_manager().request_models(&host_id).await {
         Ok(providers) => (axum::http::StatusCode::OK, axum::Json(providers)).into_response(),
         Err(e) => {
             warn!("Failed to get models from host {}: {}", host_id, e);
@@ -275,7 +315,10 @@ mod tests {
     #[test]
     fn accepts_matching_bearer_token() {
         let mut headers = HeaderMap::new();
-        headers.insert("Authorization", HeaderValue::from_static("Bearer secret-token"));
+        headers.insert(
+            "Authorization",
+            HeaderValue::from_static("Bearer secret-token"),
+        );
 
         assert!(is_gateway_authorized(&headers, "secret-token"));
     }
@@ -290,7 +333,10 @@ mod tests {
     #[test]
     fn rejects_when_scheme_is_not_bearer() {
         let mut headers = HeaderMap::new();
-        headers.insert("Authorization", HeaderValue::from_static("Basic secret-token"));
+        headers.insert(
+            "Authorization",
+            HeaderValue::from_static("Basic secret-token"),
+        );
 
         assert!(!is_gateway_authorized(&headers, "secret-token"));
     }
@@ -298,7 +344,10 @@ mod tests {
     #[test]
     fn rejects_when_bearer_token_does_not_match() {
         let mut headers = HeaderMap::new();
-        headers.insert("Authorization", HeaderValue::from_static("Bearer wrong-token"));
+        headers.insert(
+            "Authorization",
+            HeaderValue::from_static("Bearer wrong-token"),
+        );
 
         assert!(!is_gateway_authorized(&headers, "secret-token"));
     }

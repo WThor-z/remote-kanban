@@ -29,3 +29,69 @@ export type AgentEvent =
   | { type: 'raw_output'; stream: 'stdout' | 'stderr'; content: string };
 
 export type FileAction = 'created' | 'modified' | 'deleted' | 'renamed';
+
+export interface OrchestratorExecutionEvent {
+  executionId: string;
+  orgId: string;
+  traceId: string;
+  seq: number;
+  ts: number;
+  taskId: string;
+  hostId?: string;
+  payload: ExecutionEvent;
+}
+
+export interface OrchestratorExecutionEventsResponse {
+  events: OrchestratorExecutionEvent[];
+  hasMore: boolean;
+  nextOffset?: number;
+}
+
+export interface OrchestratorExecutionListItem {
+  executionId: string;
+  taskId: string;
+  projectId?: string;
+  workspaceId?: string;
+  hostId?: string;
+  traceId?: string;
+  orgId?: string;
+  parentExecutionId?: string;
+  agentRole?: string;
+  handoffId?: string;
+  agentType: string;
+  baseBranch: string;
+  status: string;
+  createdAt: string;
+  startedAt?: string;
+  endedAt?: string;
+  durationMs?: number;
+  summary?: string;
+  error?: string;
+  eventCount: number;
+}
+
+export interface OrchestratorExecutionListResponse {
+  items: OrchestratorExecutionListItem[];
+  hasMore: boolean;
+  nextOffset?: number;
+}
+
+export interface OrchestratorAuditEvent {
+  id: string;
+  ts: string;
+  orgId: string;
+  actor: string;
+  action: string;
+  executionId?: string;
+  taskId?: string;
+  hostId?: string;
+  traceId?: string;
+  status?: string;
+  details?: Record<string, unknown>;
+}
+
+export interface OrchestratorAuditListResponse {
+  items: OrchestratorAuditEvent[];
+  hasMore: boolean;
+  nextOffset?: number;
+}

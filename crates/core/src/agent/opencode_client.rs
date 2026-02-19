@@ -152,13 +152,14 @@ impl OpencodeClient {
             cmd.creation_flags(0x00000200); // CREATE_NEW_PROCESS_GROUP
         }
 
-        let mut child = cmd.spawn().map_err(|e| {
-            Error::Agent(format!("Failed to spawn opencode process: {}", e))
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| Error::Agent(format!("Failed to spawn opencode process: {}", e)))?;
 
-        let stdout = child.stdout.take().ok_or_else(|| {
-            Error::Agent("Failed to capture stdout".into())
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| Error::Agent("Failed to capture stdout".into()))?;
 
         let base_url = Arc::clone(&self.base_url);
         let state = Arc::clone(&self.state);
@@ -227,7 +228,11 @@ impl OpencodeClient {
 
     /// Wait for server to be healthy
     pub async fn wait_for_health(&self) -> Result<bool> {
-        let base_url = self.base_url.read().await.clone()
+        let base_url = self
+            .base_url
+            .read()
+            .await
+            .clone()
             .ok_or_else(|| Error::Agent("Server not started".into()))?;
 
         let client = reqwest::Client::new();
@@ -257,14 +262,22 @@ impl OpencodeClient {
 
     /// Create a session
     pub async fn create_session(&self) -> Result<String> {
-        let base_url = self.base_url.read().await.clone()
+        let base_url = self
+            .base_url
+            .read()
+            .await
+            .clone()
             .ok_or_else(|| Error::Agent("Server not started".into()))?;
 
         let client = reqwest::Client::new();
         let directory = self.config.cwd.to_string_lossy();
 
         let resp = client
-            .post(format!("{}/session?directory={}", base_url, urlencoding::encode(&directory)))
+            .post(format!(
+                "{}/session?directory={}",
+                base_url,
+                urlencoding::encode(&directory)
+            ))
             .headers(self.get_headers())
             .json(&serde_json::json!({}))
             .send()
@@ -278,7 +291,9 @@ impl OpencodeClient {
             )));
         }
 
-        let data: serde_json::Value = resp.json().await
+        let data: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| Error::Agent(format!("Failed to parse session response: {}", e)))?;
 
         data.get("id")
@@ -289,7 +304,11 @@ impl OpencodeClient {
 
     /// Send a message to a session
     pub async fn send_message(&self, session_id: &str, prompt: &str) -> Result<()> {
-        let base_url = self.base_url.read().await.clone()
+        let base_url = self
+            .base_url
+            .read()
+            .await
+            .clone()
             .ok_or_else(|| Error::Agent("Server not started".into()))?;
 
         let client = reqwest::Client::new();
@@ -312,10 +331,7 @@ impl OpencodeClient {
 
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(Error::Agent(format!(
-                "Failed to send message: {}",
-                text
-            )));
+            return Err(Error::Agent(format!("Failed to send message: {}", text)));
         }
 
         Ok(())
@@ -323,7 +339,11 @@ impl OpencodeClient {
 
     /// Connect to event stream and process events
     pub async fn connect_event_stream(&self, session_id: &str) -> Result<()> {
-        let base_url = self.base_url.read().await.clone()
+        let base_url = self
+            .base_url
+            .read()
+            .await
+            .clone()
             .ok_or_else(|| Error::Agent("Server not started".into()))?;
 
         let directory = self.config.cwd.to_string_lossy();
@@ -336,7 +356,11 @@ impl OpencodeClient {
         *self.state.write().await = ClientState::Running;
 
         let resp = client
-            .get(format!("{}/event?directory={}", base_url, urlencoding::encode(&directory)))
+            .get(format!(
+                "{}/event?directory={}",
+                base_url,
+                urlencoding::encode(&directory)
+            ))
             .headers(self.get_headers())
             .header("Accept", "text/event-stream")
             .send()
@@ -365,12 +389,12 @@ impl OpencodeClient {
                     match chunk {
                         Some(Ok(bytes)) => {
                             buffer.push_str(&String::from_utf8_lossy(&bytes));
-                            
+
                             // Process complete lines
                             while let Some(newline_pos) = buffer.find('\n') {
                                 let line = buffer[..newline_pos].to_string();
                                 buffer = buffer[newline_pos + 1..].to_string();
-                                
+
                                 if line.starts_with("data: ") {
                                     if let Ok(event) = serde_json::from_str::<OpencodeEvent>(&line[6..]) {
                                         // Filter by session ID
@@ -379,17 +403,17 @@ impl OpencodeClient {
                                                 continue;
                                             }
                                         }
-                                        
+
                                         debug!("OpenCode event: {:?}", event.event_type);
                                         let _ = event_tx.send(event.clone());
-                                        
+
                                         // Check for session idle (completion)
                                         if event.event_type == "session.idle" {
                                             info!("Session completed");
                                             *self.state.write().await = ClientState::Completed;
                                             return Ok(());
                                         }
-                                        
+
                                         // Check for session error
                                         if event.event_type == "session.error" {
                                             error!("Session error: {:?}", event.properties);
@@ -418,10 +442,22 @@ impl OpencodeClient {
 
     fn extract_session_id(event: &OpencodeEvent) -> Option<String> {
         let props = &event.properties;
-        
-        props.get("sessionID").and_then(|v| v.as_str())
-            .or_else(|| props.get("info").and_then(|i| i.get("sessionID")).and_then(|v| v.as_str()))
-            .or_else(|| props.get("part").and_then(|p| p.get("sessionID")).and_then(|v| v.as_str()))
+
+        props
+            .get("sessionID")
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                props
+                    .get("info")
+                    .and_then(|i| i.get("sessionID"))
+                    .and_then(|v| v.as_str())
+            })
+            .or_else(|| {
+                props
+                    .get("part")
+                    .and_then(|p| p.get("sessionID"))
+                    .and_then(|v| v.as_str())
+            })
             .map(|s| s.to_string())
     }
 
@@ -489,25 +525,32 @@ impl OpencodeClient {
                 // Create a mini client for event stream
                 let directory = client_config_cwd.to_string_lossy();
                 let client = reqwest::Client::new();
-                
+
                 let credentials = base64::engine::general_purpose::STANDARD
                     .encode(format!("opencode:{}", password));
-                
+
                 let mut headers = reqwest::header::HeaderMap::new();
                 headers.insert("Content-Type", "application/json".parse().unwrap());
-                headers.insert("Authorization", format!("Basic {}", credentials).parse().unwrap());
+                headers.insert(
+                    "Authorization",
+                    format!("Basic {}", credentials).parse().unwrap(),
+                );
                 headers.insert("x-opencode-directory", directory.parse().unwrap());
                 headers.insert("Accept", "text/event-stream".parse().unwrap());
 
                 let base_url = client_base_url.read().await.clone().unwrap_or_default();
-                
+
                 let (abort_tx, mut abort_rx) = tokio::sync::oneshot::channel();
                 *client_abort_tx.lock().await = Some(abort_tx);
 
                 *client_state.write().await = ClientState::Running;
 
                 let resp = match client
-                    .get(format!("{}/event?directory={}", base_url, urlencoding::encode(&directory)))
+                    .get(format!(
+                        "{}/event?directory={}",
+                        base_url,
+                        urlencoding::encode(&directory)
+                    ))
                     .headers(headers)
                     .send()
                     .await
@@ -532,11 +575,11 @@ impl OpencodeClient {
                             match chunk {
                                 Some(Ok(bytes)) => {
                                     buffer.push_str(&String::from_utf8_lossy(&bytes));
-                                    
+
                                     while let Some(newline_pos) = buffer.find('\n') {
                                         let line = buffer[..newline_pos].to_string();
                                         buffer = buffer[newline_pos + 1..].to_string();
-                                        
+
                                         if line.starts_with("data: ") {
                                             if let Ok(event) = serde_json::from_str::<OpencodeEvent>(&line[6..]) {
                                                 if let Some(event_session_id) = OpencodeClient::extract_session_id(&event) {
@@ -544,14 +587,14 @@ impl OpencodeClient {
                                                         continue;
                                                     }
                                                 }
-                                                
+
                                                 let _ = client_event_tx.send(event.clone());
-                                                
+
                                                 if event.event_type == "session.idle" {
                                                     *client_state.write().await = ClientState::Completed;
                                                     return;
                                                 }
-                                                
+
                                                 if event.event_type == "session.error" {
                                                     *client_state.write().await = ClientState::Failed;
                                                     return;
@@ -595,12 +638,15 @@ impl OpencodeClient {
     }
 
     fn get_headers(&self) -> reqwest::header::HeaderMap {
-        let credentials = base64::engine::general_purpose::STANDARD
-            .encode(format!("opencode:{}", self.password));
-        
+        let credentials =
+            base64::engine::general_purpose::STANDARD.encode(format!("opencode:{}", self.password));
+
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("Content-Type", "application/json".parse().unwrap());
-        headers.insert("Authorization", format!("Basic {}", credentials).parse().unwrap());
+        headers.insert(
+            "Authorization",
+            format!("Basic {}", credentials).parse().unwrap(),
+        );
         headers.insert(
             "x-opencode-directory",
             self.config.cwd.to_string_lossy().parse().unwrap(),

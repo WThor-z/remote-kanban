@@ -16,6 +16,10 @@ pub struct Project {
     /// Human-readable project name (e.g., "vibe-kanban")
     pub name: String,
 
+    /// Organization that owns this project
+    #[serde(default = "default_org_id")]
+    pub org_id: String,
+
     /// Local filesystem path on the Gateway machine
     pub local_path: String,
 
@@ -55,6 +59,7 @@ impl Project {
         Self {
             id: Uuid::new_v4(),
             name: name.into(),
+            org_id: default_org_id(),
             local_path: local_path.into(),
             remote_url: None,
             default_branch: "main".to_string(),
@@ -69,6 +74,15 @@ impl Project {
     /// Set the remote URL
     pub fn with_remote_url(mut self, url: impl Into<String>) -> Self {
         self.remote_url = Some(url.into());
+        self
+    }
+
+    /// Set the organization
+    pub fn with_org_id(mut self, org_id: impl Into<String>) -> Self {
+        let normalized = org_id.into().trim().to_string();
+        if !normalized.is_empty() {
+            self.org_id = normalized;
+        }
         self
     }
 
@@ -110,6 +124,9 @@ pub struct CreateProjectRequest {
 
     /// Workspace that owns this project
     pub workspace_id: Uuid,
+
+    /// Organization that owns this project (optional for backward compatibility)
+    pub org_id: Option<String>,
 }
 
 /// Summary view of a project for listing
@@ -118,6 +135,7 @@ pub struct CreateProjectRequest {
 pub struct ProjectSummary {
     pub id: Uuid,
     pub name: String,
+    pub org_id: String,
     pub local_path: String,
     pub remote_url: Option<String>,
     pub default_branch: String,
@@ -133,6 +151,7 @@ impl From<&Project> for ProjectSummary {
         Self {
             id: project.id,
             name: project.name.clone(),
+            org_id: project.org_id.clone(),
             local_path: project.local_path.clone(),
             remote_url: project.remote_url.clone(),
             default_branch: project.default_branch.clone(),
@@ -143,6 +162,14 @@ impl From<&Project> for ProjectSummary {
             updated_at: project.updated_at,
         }
     }
+}
+
+fn default_org_id() -> String {
+    std::env::var("VK_DEFAULT_ORG_ID")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "default-org".to_string())
 }
 
 #[cfg(test)]
@@ -161,6 +188,7 @@ mod tests {
         );
 
         assert_eq!(project.name, "my-project");
+        assert!(!project.org_id.is_empty());
         assert_eq!(project.local_path, "/path/to/project");
         assert_eq!(project.default_branch, "main");
         assert_eq!(project.worktree_dir, ".worktrees");
@@ -174,10 +202,12 @@ mod tests {
         let gateway_id = "host-1".to_string();
         let workspace_id = Uuid::new_v4();
         let project = Project::new("my-project", "/path/to/project", gateway_id, workspace_id)
+            .with_org_id("org-test")
             .with_remote_url("git@github.com:user/repo.git")
             .with_default_branch("master")
             .with_worktree_dir(".git-worktrees");
 
+        assert_eq!(project.org_id, "org-test");
         assert_eq!(
             project.remote_url,
             Some("git@github.com:user/repo.git".to_string())
@@ -204,5 +234,6 @@ mod tests {
 
         let summary = ProjectSummary::from(&project);
         assert_eq!(summary.workspace_id, workspace_id);
+        assert_eq!(summary.org_id, project.org_id);
     }
 }

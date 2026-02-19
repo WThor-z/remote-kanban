@@ -16,11 +16,13 @@ import {
   FolderGit2,
   ChevronDown,
   LayoutGrid,
+  Activity,
   Database,
 } from 'lucide-react';
 import { KanbanBoard } from './components/kanban/KanbanBoard';
 import { TaskDetailPanel, CreateTaskModal } from './components/task';
 import { MemoryPage } from './components/memory/MemoryPage';
+import { OpsConsolePage } from './components/ops/OpsConsolePage';
 import { WorkspaceEntryPage } from './components/workspace/WorkspaceEntryPage';
 import { WorkspaceProjectManagementPage } from './components/workspace/WorkspaceProjectManagementPage';
 import type { KanbanTask, AgentType } from '@opencode-vibe/protocol';
@@ -55,7 +57,7 @@ function App() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [skin, setSkin] = useState<'neural' | 'lab'>(readStoredSkin);
   const [language, setLanguage] = useState(readStoredConsoleLanguage);
-  const [view, setView] = useState<'board' | 'memory' | 'projects'>('board');
+  const [view, setView] = useState<'ops' | 'board' | 'memory' | 'projects'>('ops');
   const [activeWorkspaceId, setActiveWorkspaceId] = useState('');
   const [workspaceEntrySelectionId, setWorkspaceEntrySelectionId] = useState(readStoredWorkspaceScope);
   const [hasStaleStoredWorkspace, setHasStaleStoredWorkspace] = useState(false);
@@ -273,7 +275,7 @@ function App() {
     setWorkspaceEntrySelectionId(selectedWorkspace.id);
     setSelectedTask(null);
     selectTask(null);
-    setView('board');
+    setView('ops');
   }, [selectTask, workspaceEntrySelectionId, workspaces]);
 
   const handleWorkspaceSwitch = useCallback((nextWorkspaceId: string) => {
@@ -291,7 +293,7 @@ function App() {
     setWorkspaceEntrySelectionId(nextWorkspaceId);
     setSelectedTask(null);
     selectTask(null);
-    setView('board');
+    setView('ops');
     setIsWorkspaceScopeOpen(false);
   }, [activeWorkspaceId, languageCopy.app.workspaceSwitchConfirm, selectTask]);
 
@@ -439,6 +441,17 @@ function App() {
             </div>
             <button
               type="button"
+              onClick={() => {
+                setView('ops');
+                setSelectedTask(null);
+                selectTask(null);
+              }}
+              className="tech-btn tech-btn-secondary"
+            >
+              <Activity size={14} /> {languageCopy.app.ops}
+            </button>
+            <button
+              type="button"
               onClick={() => setView('board')}
               className="tech-btn tech-btn-secondary"
             >
@@ -534,7 +547,9 @@ function App() {
           {gatewayInfoError && <div className="gateway-error">{gatewayInfoError}</div>}
         </section>
 
-        {view === 'board' ? (
+        {view === 'ops' ? (
+          <OpsConsolePage language={language} />
+        ) : view === 'board' ? (
           <section className="tech-panel board-panel reveal reveal-2">
             <div className="section-bar">
                 <h2 className="section-title">{appCopy.sections.boardTitle}</h2>

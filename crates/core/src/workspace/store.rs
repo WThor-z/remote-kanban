@@ -15,6 +15,14 @@ use crate::Result;
 
 use super::model::{normalize_slug, CreateWorkspaceRequest, Workspace, WorkspaceSummary};
 
+fn default_org_id() -> String {
+    std::env::var("VK_DEFAULT_ORG_ID")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "default-org".to_string())
+}
+
 #[derive(Clone)]
 pub struct WorkspaceStore {
     workspaces: Arc<RwLock<HashMap<Uuid, Workspace>>>,
@@ -42,12 +50,20 @@ impl WorkspaceStore {
                             "local".to_string()
                         }
                     };
+                    let org_id = match workspace.org_id {
+                        Some(org_id) if !org_id.trim().is_empty() => org_id.trim().to_string(),
+                        _ => {
+                            migrated = true;
+                            default_org_id()
+                        }
+                    };
                     (
                         workspace.id,
                         Workspace {
                             id: workspace.id,
                             name: workspace.name,
                             slug: workspace.slug,
+                            org_id,
                             host_id,
                             root_path: workspace.root_path,
                             default_project_id: workspace.default_project_id,
@@ -84,7 +100,16 @@ impl WorkspaceStore {
             ));
         }
 
+        let org_id = request
+            .org_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(default_org_id);
+
         let mut workspace = Workspace::new(request.name, host_id, request.root_path);
+        workspace.org_id = org_id;
         if let Some(slug) = request.slug {
             let normalized = normalize_slug(&slug)
                 .ok_or_else(|| Error::InvalidInput("Workspace slug cannot be empty".to_string()))?;
@@ -139,6 +164,10 @@ impl WorkspaceStore {
                 "Workspace hostId cannot be empty".to_string(),
             ));
         }
+        updated.org_id = updated.org_id.trim().to_string();
+        if updated.org_id.is_empty() {
+            updated.org_id = default_org_id();
+        }
         updated.updated_at = Utc::now();
         if workspaces
             .values()
@@ -184,19 +213,13 @@ impl WorkspaceStore {
         }
 
         let parent = self.file_path.parent().unwrap_or_else(|| Path::new("."));
-        let temp_path = parent.join(format!(
-            ".{}.tmp",
-            Uuid::new_v4().as_hyphenated()
-        ));
+        let temp_path = parent.join(format!(".{}.tmp", Uuid::new_v4().as_hyphenated()));
 
         tokio::fs::write(&temp_path, content)
             .await
             .map_err(|e| Error::Storage(format!("Failed to write temp workspaces file: {}", e)))?;
 
-        let backup_path = parent.join(format!(
-            ".{}.bak",
-            Uuid::new_v4().as_hyphenated()
-        ));
+        let backup_path = parent.join(format!(".{}.bak", Uuid::new_v4().as_hyphenated()));
 
         let mut had_original = false;
         if tokio::fs::metadata(&self.file_path).await.is_ok() {
@@ -235,6 +258,7 @@ struct StoredWorkspace {
     id: Uuid,
     name: String,
     slug: String,
+    org_id: Option<String>,
     host_id: Option<String>,
     root_path: String,
     default_project_id: Option<Uuid>,
@@ -252,6 +276,7 @@ mod tests {
         CreateWorkspaceRequest {
             name: name.to_string(),
             slug: slug.map(str::to_string),
+            org_id: None,
             host_id: "host-1".to_string(),
             root_path: format!("/repos/{}", name.to_lowercase().replace(' ', "-")),
             default_project_id: None,
@@ -269,6 +294,7 @@ mod tests {
             .create(CreateWorkspaceRequest {
                 name: "Platform".to_string(),
                 slug: None,
+                org_id: None,
                 host_id: "host-1".to_string(),
                 root_path: "/repos/platform".to_string(),
                 default_project_id: None,
@@ -330,6 +356,7 @@ mod tests {
             .create(CreateWorkspaceRequest {
                 name: "Platform".to_string(),
                 slug: None,
+                org_id: None,
                 host_id: "   ".to_string(),
                 root_path: "/repos/platform".to_string(),
                 default_project_id: None,
@@ -344,7 +371,10 @@ mod tests {
         let path = dir.path().join("workspaces.json");
         let store = WorkspaceStore::new(path).await.unwrap();
 
-        let created = store.create(create_request("Platform", None)).await.unwrap();
+        let created = store
+            .create(create_request("Platform", None))
+            .await
+            .unwrap();
         let mut to_update = created.clone();
         to_update.host_id = "".to_string();
 
@@ -391,7 +421,10 @@ mod tests {
         let listed = store.list().await;
         let mut sorted = listed.clone();
         sorted.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
-        assert_eq!(listed.iter().map(|w| w.id).collect::<Vec<_>>(), sorted.iter().map(|w| w.id).collect::<Vec<_>>());
+        assert_eq!(
+            listed.iter().map(|w| w.id).collect::<Vec<_>>(),
+            sorted.iter().map(|w| w.id).collect::<Vec<_>>()
+        );
     }
 
     #[tokio::test]
@@ -417,7 +450,10 @@ mod tests {
         let path = parent.join("workspaces.json");
         let store = WorkspaceStore::new(path.clone()).await.unwrap();
 
-        let created = store.create(create_request("Platform", None)).await.unwrap();
+        let created = store
+            .create(create_request("Platform", None))
+            .await
+            .unwrap();
 
         tokio::fs::remove_file(&path).await.unwrap();
         tokio::fs::remove_dir(&parent).await.unwrap();
@@ -440,7 +476,10 @@ mod tests {
         let path = parent.join("workspaces.json");
         let store = WorkspaceStore::new(path.clone()).await.unwrap();
 
-        let created = store.create(create_request("Platform", None)).await.unwrap();
+        let created = store
+            .create(create_request("Platform", None))
+            .await
+            .unwrap();
 
         tokio::fs::remove_file(&path).await.unwrap();
         tokio::fs::remove_dir(&parent).await.unwrap();

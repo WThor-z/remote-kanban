@@ -9,6 +9,7 @@ const CONSOLE_LANGUAGE_COPY = {
       switchButtonAria: 'Switch language',
     },
     app: {
+      ops: 'Ops',
       board: 'Board',
       memory: 'Memory',
       manageProjects: 'Manage projects',
@@ -123,8 +124,12 @@ const CONSOLE_LANGUAGE_COPY = {
         autoWrite: 'Auto Write',
         promptInjection: 'Prompt Injection',
         llmExtractFallback: 'LLM Extract Fallback',
+        dedupeEnabled: 'Dedupe Writes',
         tokenBudget: 'Token Budget',
         retrievalTopK: 'Retrieval Top K',
+        recencyHalfLifeHours: 'Recency Half-life (h)',
+        hitCountWeight: 'Hit Count Weight',
+        pinnedBoost: 'Pinned Boost',
         saveSettings: 'Save Settings',
       },
       editor: {
@@ -151,6 +156,7 @@ const CONSOLE_LANGUAGE_COPY = {
       switchButtonAria: '切换语言',
     },
     app: {
+      ops: '运维台',
       board: '看板',
       memory: '记忆',
       manageProjects: '项目管理',
@@ -264,8 +270,12 @@ const CONSOLE_LANGUAGE_COPY = {
         autoWrite: '自动写入',
         promptInjection: '提示注入',
         llmExtractFallback: 'LLM 抽取兜底',
+        dedupeEnabled: '写入去重',
         tokenBudget: 'Token 预算',
         retrievalTopK: '检索 Top K',
+        recencyHalfLifeHours: '新鲜度半衰期(小时)',
+        hitCountWeight: '命中次数权重',
+        pinnedBoost: '置顶加权',
         saveSettings: '保存设置',
       },
       editor: {

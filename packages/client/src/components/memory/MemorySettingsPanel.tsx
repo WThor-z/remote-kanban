@@ -20,6 +20,14 @@ const asNumber = (value: string, fallback: number): number => {
   return parsed;
 };
 
+const asFloat = (value: string, fallback: number): number => {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return parsed;
+};
+
 export function MemorySettingsPanel({
   settings,
   isLoading,
@@ -51,6 +59,10 @@ export function MemorySettingsPanel({
       tokenBudget: draft.tokenBudget,
       retrievalTopK: draft.retrievalTopK,
       llmExtractEnabled: draft.llmExtractEnabled,
+      recencyHalfLifeHours: draft.recencyHalfLifeHours,
+      hitCountWeight: draft.hitCountWeight,
+      pinnedBoost: draft.pinnedBoost,
+      dedupeEnabled: draft.dedupeEnabled,
     });
   };
 
@@ -113,6 +125,16 @@ export function MemorySettingsPanel({
           />
           <span>{copy.llmExtractFallback}</span>
         </label>
+        <label className="memory-toggle">
+          <input
+            type="checkbox"
+            checked={draft.dedupeEnabled}
+            onChange={(event) =>
+              setDraft((prev) => (prev ? { ...prev, dedupeEnabled: event.target.checked } : prev))
+            }
+          />
+          <span>{copy.dedupeEnabled}</span>
+        </label>
       </div>
 
       <div className="memory-settings__numbers">
@@ -142,6 +164,55 @@ export function MemorySettingsPanel({
             onChange={(event) =>
               setDraft((prev) =>
                 prev ? { ...prev, retrievalTopK: asNumber(event.target.value, prev.retrievalTopK) } : prev
+              )
+            }
+          />
+        </label>
+        <label className="field">
+          <span className="field-label">{copy.recencyHalfLifeHours}</span>
+          <input
+            className="glass-input"
+            type="number"
+            min={1}
+            max={720}
+            value={draft.recencyHalfLifeHours}
+            onChange={(event) =>
+              setDraft((prev) =>
+                prev
+                  ? { ...prev, recencyHalfLifeHours: asNumber(event.target.value, prev.recencyHalfLifeHours) }
+                  : prev
+              )
+            }
+          />
+        </label>
+        <label className="field">
+          <span className="field-label">{copy.hitCountWeight}</span>
+          <input
+            className="glass-input"
+            type="number"
+            min={0}
+            max={4}
+            step={0.05}
+            value={draft.hitCountWeight}
+            onChange={(event) =>
+              setDraft((prev) =>
+                prev ? { ...prev, hitCountWeight: asFloat(event.target.value, prev.hitCountWeight) } : prev
+              )
+            }
+          />
+        </label>
+        <label className="field">
+          <span className="field-label">{copy.pinnedBoost}</span>
+          <input
+            className="glass-input"
+            type="number"
+            min={0}
+            max={10}
+            step={0.05}
+            value={draft.pinnedBoost}
+            onChange={(event) =>
+              setDraft((prev) =>
+                prev ? { ...prev, pinnedBoost: asFloat(event.target.value, prev.pinnedBoost) } : prev
               )
             }
           />

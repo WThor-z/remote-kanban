@@ -1,9 +1,9 @@
-use std::future::Future;
-use std::path::PathBuf;
-use std::pin::Pin;
 use futures::StreamExt;
 use reqwest::Client;
 use serde::Serialize;
+use std::future::Future;
+use std::path::PathBuf;
+use std::pin::Pin;
 use tokio::sync::mpsc;
 use tracing::info;
 
@@ -87,34 +87,41 @@ impl WorkerClient {
 
         info!("Sending execution request to worker: {}/execute", self.url);
 
-        let res = self.client
+        let res = self
+            .client
             .post(format!("{}/execute", self.url))
             .json(&req)
             .send()
             .await
-            .map_err(|e| ExecutorError::execution_failed(format!("Failed to connect to worker: {}", e)))?;
+            .map_err(|e| {
+                ExecutorError::execution_failed(format!("Failed to connect to worker: {}", e))
+            })?;
 
         if !res.status().is_success() {
             let error_text = res.text().await.unwrap_or_else(|_| String::new());
-            return Err(ExecutorError::execution_failed(format!("Worker returned error: {}", error_text)));
+            return Err(ExecutorError::execution_failed(format!(
+                "Worker returned error: {}",
+                error_text
+            )));
         }
 
         // Handle stream
         let mut stream = res.bytes_stream();
         let mut buffer = String::new();
         let mut final_result = Ok(());
-        
+
         let mut parser = create_parser(agent_type);
 
         while let Some(item) = stream.next().await {
-            let chunk: bytes::Bytes = item.map_err(|e| ExecutorError::execution_failed(format!("Stream error: {}", e)))?;
+            let chunk: bytes::Bytes =
+                item.map_err(|e| ExecutorError::execution_failed(format!("Stream error: {}", e)))?;
             let chunk_str = String::from_utf8_lossy(&chunk);
             buffer.push_str(&chunk_str);
 
             while let Some(idx) = buffer.find("\n\n") {
-                let msg = buffer.drain(..idx+2).collect::<String>();
+                let msg = buffer.drain(..idx + 2).collect::<String>();
                 let msg = msg.trim();
-                
+
                 if msg.starts_with("data: ") {
                     let data = msg.trim_start_matches("data: ");
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
@@ -130,18 +137,27 @@ impl WorkerClient {
                             Some("status") => {
                                 if let Some(status) = json["status"].as_str() {
                                     if status == "failed" {
-                                        let err_msg = json.get("error").and_then(|v| v.as_str()).unwrap_or("Unknown error");
-                                        let _ = event_tx.send(AgentEvent::Error { 
-                                            message: err_msg.to_string(), 
-                                            recoverable: false 
-                                        }).await;
-                                        final_result = Err(ExecutorError::execution_failed(format!("Task failed: {}", err_msg)));
+                                        let err_msg = json
+                                            .get("error")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("Unknown error");
+                                        let _ = event_tx
+                                            .send(AgentEvent::Error {
+                                                message: err_msg.to_string(),
+                                                recoverable: false,
+                                            })
+                                            .await;
+                                        final_result = Err(ExecutorError::execution_failed(
+                                            format!("Task failed: {}", err_msg),
+                                        ));
                                     }
                                     if status == "completed" {
-                                        let _ = event_tx.send(AgentEvent::Completed { 
-                                            success: true, 
-                                            summary: None 
-                                        }).await;
+                                        let _ = event_tx
+                                            .send(AgentEvent::Completed {
+                                                success: true,
+                                                summary: None,
+                                            })
+                                            .await;
                                         final_result = Ok(());
                                     }
                                 }

@@ -1,5 +1,21 @@
 use serde::{Deserialize, Serialize};
 
+const fn default_memory_recency_half_life_hours() -> u32 {
+    72
+}
+
+const fn default_memory_hit_count_weight() -> f32 {
+    0.15
+}
+
+const fn default_memory_pinned_boost() -> f32 {
+    1.25
+}
+
+const fn default_memory_dedupe_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryScope {
@@ -60,6 +76,14 @@ pub struct MemorySettings {
     pub token_budget: u32,
     pub retrieval_top_k: u32,
     pub llm_extract_enabled: bool,
+    #[serde(default = "default_memory_recency_half_life_hours")]
+    pub recency_half_life_hours: u32,
+    #[serde(default = "default_memory_hit_count_weight")]
+    pub hit_count_weight: f32,
+    #[serde(default = "default_memory_pinned_boost")]
+    pub pinned_boost: f32,
+    #[serde(default = "default_memory_dedupe_enabled")]
+    pub dedupe_enabled: bool,
 }
 
 impl Default for MemorySettings {
@@ -73,6 +97,10 @@ impl Default for MemorySettings {
             token_budget: 1200,
             retrieval_top_k: 8,
             llm_extract_enabled: true,
+            recency_half_life_hours: default_memory_recency_half_life_hours(),
+            hit_count_weight: default_memory_hit_count_weight(),
+            pinned_boost: default_memory_pinned_boost(),
+            dedupe_enabled: default_memory_dedupe_enabled(),
         }
     }
 }
@@ -96,6 +124,14 @@ pub struct MemorySettingsPatch {
     pub retrieval_top_k: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub llm_extract_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recency_half_life_hours: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hit_count_weight: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_boost: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dedupe_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

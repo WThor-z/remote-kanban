@@ -3,6 +3,7 @@
 use axum::{extract::State, routing::get, Json, Router};
 use serde::Serialize;
 
+use crate::feature_flags::{snapshot as feature_flags_snapshot, FeatureFlagsSnapshot};
 use crate::state::AppState;
 
 #[derive(Serialize)]
@@ -13,12 +14,13 @@ struct HealthResponse {
     data_dir: String,
     worker_url: String,
     repo_path: String,
+    feature_flags: FeatureFlagsSnapshot,
 }
 
 async fn health_check(State(state): State<AppState>) -> Json<HealthResponse> {
     let data_dir = std::env::var("VK_DATA_DIR").unwrap_or_else(|_| ".vk-data".to_string());
-    let worker_url = std::env::var("AGENT_WORKER_URL")
-        .unwrap_or_else(|_| "http://localhost:4000".to_string());
+    let worker_url =
+        std::env::var("AGENT_WORKER_URL").unwrap_or_else(|_| "http://localhost:4000".to_string());
     let repo_path = state.repo_path().to_string_lossy().to_string();
 
     Json(HealthResponse {
@@ -27,6 +29,7 @@ async fn health_check(State(state): State<AppState>) -> Json<HealthResponse> {
         data_dir,
         worker_url,
         repo_path,
+        feature_flags: feature_flags_snapshot(),
     })
 }
 

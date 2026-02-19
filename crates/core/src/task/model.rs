@@ -39,6 +39,8 @@ impl Default for TaskPriority {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: Uuid,
+    #[serde(default = "default_org_id")]
+    pub org_id: String,
     pub project_id: Option<Uuid>,
     pub workspace_id: Option<Uuid>,
     pub title: String,
@@ -58,6 +60,7 @@ impl Task {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4(),
+            org_id: default_org_id(),
             project_id: None,
             workspace_id: None,
             title: title.into(),
@@ -98,6 +101,15 @@ impl Task {
         self
     }
 
+    /// Set organization id
+    pub fn with_org_id(mut self, org_id: impl Into<String>) -> Self {
+        let normalized = org_id.into().trim().to_string();
+        if !normalized.is_empty() {
+            self.org_id = normalized;
+        }
+        self
+    }
+
     /// Set the priority
     pub fn with_priority(mut self, priority: TaskPriority) -> Self {
         self.priority = priority;
@@ -123,6 +135,14 @@ impl Task {
     }
 }
 
+fn default_org_id() -> String {
+    std::env::var("VK_DEFAULT_ORG_ID")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "default-org".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,6 +151,7 @@ mod tests {
     fn test_create_task() {
         let task = Task::new("Test task");
         assert_eq!(task.title, "Test task");
+        assert!(!task.org_id.is_empty());
         assert!(task.project_id.is_none());
         assert!(task.workspace_id.is_none());
         assert_eq!(task.status, TaskStatus::Todo);
@@ -162,6 +183,12 @@ mod tests {
 
         assert_eq!(task.project_id, Some(project_id));
         assert_eq!(task.workspace_id, Some(workspace_id));
+    }
+
+    #[test]
+    fn test_task_with_org_id() {
+        let task = Task::new("Test task").with_org_id("org-test");
+        assert_eq!(task.org_id, "org-test");
     }
 
     #[test]

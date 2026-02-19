@@ -55,14 +55,14 @@ impl AgentType {
                 } else {
                     "opencode"
                 }
-            },
+            }
             Self::ClaudeCode => {
                 if cfg!(target_os = "windows") {
                     "claude.cmd"
                 } else {
                     "claude"
                 }
-            },
+            }
             Self::GeminiCli => "gemini",
             Self::Codex => "codex",
         }
@@ -106,10 +106,7 @@ pub struct AgentProcess {
 
 impl AgentProcess {
     /// Spawn a new agent process
-    pub async fn spawn(
-        config: AgentConfig,
-        event_tx: mpsc::Sender<AgentEvent>,
-    ) -> Result<Self> {
+    pub async fn spawn(config: AgentConfig, event_tx: mpsc::Sender<AgentEvent>) -> Result<Self> {
         let command = config.agent_type.command();
         let args = config.agent_type.default_args();
 
@@ -269,11 +266,19 @@ mod tests {
 
     #[test]
     fn test_agent_type_from_str() {
-        assert_eq!(AgentType::from_str("opencode").unwrap(), AgentType::OpenCode);
-        assert_eq!(AgentType::from_str("claude-code").unwrap(), AgentType::ClaudeCode);
-        assert_eq!(AgentType::from_str("gemini-cli").unwrap(), AgentType::GeminiCli);
+        assert_eq!(
+            AgentType::from_str("opencode").unwrap(),
+            AgentType::OpenCode
+        );
+        assert_eq!(
+            AgentType::from_str("claude-code").unwrap(),
+            AgentType::ClaudeCode
+        );
+        assert_eq!(
+            AgentType::from_str("gemini-cli").unwrap(),
+            AgentType::GeminiCli
+        );
         assert_eq!(AgentType::from_str("codex").unwrap(), AgentType::Codex);
         assert!(AgentType::from_str("unknown").is_err());
     }
 }
-

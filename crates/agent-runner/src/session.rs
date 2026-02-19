@@ -30,19 +30,11 @@ pub enum SessionState {
     /// Session is paused
     Paused,
     /// Session completed
-    Completed {
-        exit_code: i32,
-        duration_ms: u64,
-    },
+    Completed { exit_code: i32, duration_ms: u64 },
     /// Session failed
-    Failed {
-        error: String,
-        duration_ms: u64,
-    },
+    Failed { error: String, duration_ms: u64 },
     /// Session was cancelled
-    Cancelled {
-        duration_ms: u64,
-    },
+    Cancelled { duration_ms: u64 },
 }
 
 impl SessionState {
@@ -95,12 +87,7 @@ pub struct ExecutionSession {
 
 impl ExecutionSession {
     /// Create a new execution session
-    pub fn new(
-        task_id: Uuid,
-        agent_type: AgentType,
-        prompt: String,
-        base_branch: String,
-    ) -> Self {
+    pub fn new(task_id: Uuid, agent_type: AgentType, prompt: String, base_branch: String) -> Self {
         let (event_tx, event_rx) = mpsc::channel(1000);
         let (agent_event_tx, agent_event_rx) = mpsc::channel(1000);
 
@@ -162,12 +149,8 @@ impl ExecutionSession {
         };
 
         if old_status != new_status {
-            let event = ExecutionEvent::status_changed(
-                self.id,
-                self.task_id,
-                old_status,
-                new_status,
-            );
+            let event =
+                ExecutionEvent::status_changed(self.id, self.task_id, old_status, new_status);
             let _ = self.event_tx.send(event).await;
         }
     }
@@ -227,7 +210,10 @@ impl ExecutionSession {
             self.id,
             self.task_id,
             worktree_path.to_string_lossy().to_string(),
-            self.worktree.as_ref().map(|w| w.branch.clone()).unwrap_or_default(),
+            self.worktree
+                .as_ref()
+                .map(|w| w.branch.clone())
+                .unwrap_or_default(),
         );
         let _ = self.event_tx.send(event).await;
 

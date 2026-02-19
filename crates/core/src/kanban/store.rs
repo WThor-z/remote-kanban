@@ -25,12 +25,11 @@ impl KanbanStore {
     /// Create a new KanbanStore with the given file path
     pub async fn new(file_path: PathBuf) -> Result<Self> {
         let state = if file_path.exists() {
-            let content = tokio::fs::read_to_string(&file_path).await.map_err(|e| {
-                Error::Storage(format!("Failed to read kanban file: {}", e))
-            })?;
-            serde_json::from_str(&content).map_err(|e| {
-                Error::Storage(format!("Failed to parse kanban file: {}", e))
-            })?
+            let content = tokio::fs::read_to_string(&file_path)
+                .await
+                .map_err(|e| Error::Storage(format!("Failed to read kanban file: {}", e)))?;
+            serde_json::from_str(&content)
+                .map_err(|e| Error::Storage(format!("Failed to parse kanban file: {}", e)))?
         } else {
             KanbanBoardState::new()
         };
@@ -44,12 +43,15 @@ impl KanbanStore {
 
     /// Create a new KanbanStore that syncs with a TaskStore
     /// This loads existing tasks from TaskStore on initialization
-    pub async fn with_task_store(file_path: PathBuf, task_store: Arc<FileTaskStore>) -> Result<Self> {
+    pub async fn with_task_store(
+        file_path: PathBuf,
+        task_store: Arc<FileTaskStore>,
+    ) -> Result<Self> {
         // First try to load from kanban.json
         let mut state = if file_path.exists() {
-            let content = tokio::fs::read_to_string(&file_path).await.map_err(|e| {
-                Error::Storage(format!("Failed to read kanban file: {}", e))
-            })?;
+            let content = tokio::fs::read_to_string(&file_path)
+                .await
+                .map_err(|e| Error::Storage(format!("Failed to read kanban file: {}", e)))?;
             serde_json::from_str(&content).unwrap_or_else(|_| KanbanBoardState::new())
         } else {
             KanbanBoardState::new()
@@ -67,7 +69,7 @@ impl KanbanStore {
                     TaskStatus::InReview => KanbanTaskStatus::Doing,
                     TaskStatus::Done => KanbanTaskStatus::Done,
                 };
-                
+
                 let mut kanban_task = KanbanTask::new(&task_id, &task.title);
                 kanban_task.status = kanban_status;
                 if let Some(desc) = &task.description {
@@ -75,7 +77,7 @@ impl KanbanStore {
                 }
                 kanban_task.created_at = task.created_at.timestamp_millis();
                 kanban_task.updated_at = Some(task.updated_at.timestamp_millis());
-                
+
                 state.add_task(kanban_task);
             }
         }
@@ -85,10 +87,10 @@ impl KanbanStore {
             file_path,
             task_store: Some(task_store),
         };
-        
+
         // Persist the synced state
         store.persist().await?;
-        
+
         Ok(store)
     }
 
@@ -154,11 +156,16 @@ impl KanbanStore {
 
     /// Create a new task
     pub async fn create_task(&self, title: &str, description: Option<&str>) -> Result<KanbanTask> {
-        let task_id = format!("task-{}-{}", 
+        let task_id = format!(
+            "task-{}-{}",
             chrono::Utc::now().timestamp_millis(),
-            uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0000")
+            uuid::Uuid::new_v4()
+                .to_string()
+                .split('-')
+                .next()
+                .unwrap_or("0000")
         );
-        
+
         let mut task = KanbanTask::new(&task_id, title);
         if let Some(desc) = description {
             task = task.with_description(desc);
@@ -207,20 +214,19 @@ impl KanbanStore {
     /// Persist the current state to file
     async fn persist(&self) -> Result<()> {
         let state = self.state.read().await;
-        let content = serde_json::to_string_pretty(&*state).map_err(|e| {
-            Error::Storage(format!("Failed to serialize kanban state: {}", e))
-        })?;
+        let content = serde_json::to_string_pretty(&*state)
+            .map_err(|e| Error::Storage(format!("Failed to serialize kanban state: {}", e)))?;
 
         // Ensure parent directory exists
         if let Some(parent) = self.file_path.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                Error::Storage(format!("Failed to create directory: {}", e))
-            })?;
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| Error::Storage(format!("Failed to create directory: {}", e)))?;
         }
 
-        tokio::fs::write(&self.file_path, content).await.map_err(|e| {
-            Error::Storage(format!("Failed to write kanban file: {}", e))
-        })?;
+        tokio::fs::write(&self.file_path, content)
+            .await
+            .map_err(|e| Error::Storage(format!("Failed to write kanban file: {}", e)))?;
 
         Ok(())
     }
@@ -235,10 +241,10 @@ mod tests {
     async fn test_create_kanban_store() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("kanban.json");
-        
+
         let store = KanbanStore::new(path).await.unwrap();
         let state = store.get_state().await;
-        
+
         assert_eq!(state.tasks.len(), 0);
     }
 
@@ -246,13 +252,16 @@ mod tests {
     async fn test_create_and_persist_task() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("kanban.json");
-        
+
         let store = KanbanStore::new(path.clone()).await.unwrap();
-        let task = store.create_task("Test Task", Some("Description")).await.unwrap();
-        
+        let task = store
+            .create_task("Test Task", Some("Description"))
+            .await
+            .unwrap();
+
         assert_eq!(task.title, "Test Task");
         assert_eq!(task.description, Some("Description".to_string()));
-        
+
         // Verify persistence
         let store2 = KanbanStore::new(path).await.unwrap();
         let state = store2.get_state().await;

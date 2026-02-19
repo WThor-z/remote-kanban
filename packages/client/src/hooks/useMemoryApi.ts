@@ -14,6 +14,10 @@ export interface MemorySettings {
   tokenBudget: number;
   retrievalTopK: number;
   llmExtractEnabled: boolean;
+  recencyHalfLifeHours: number;
+  hitCountWeight: number;
+  pinnedBoost: number;
+  dedupeEnabled: boolean;
 }
 
 export interface MemoryItem {

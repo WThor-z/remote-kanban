@@ -214,6 +214,30 @@ pub struct RunMetadata {
     /// Bound workspace context for this run
     #[serde(default)]
     pub workspace_id: Option<Uuid>,
+
+    /// Trace identifier for cross-service event stitching
+    #[serde(default)]
+    pub trace_id: Option<String>,
+
+    /// Organization identifier (reserved for multi-tenant rollout)
+    #[serde(default)]
+    pub org_id: Option<String>,
+
+    /// Bound host handling this execution
+    #[serde(default)]
+    pub host_id: Option<String>,
+
+    /// Reserved for orchestrator v1.5: parent execution in agent-team chains
+    #[serde(default)]
+    pub parent_execution_id: Option<Uuid>,
+
+    /// Reserved for orchestrator v1.5: logical role of this agent in a team
+    #[serde(default)]
+    pub agent_role: Option<String>,
+
+    /// Reserved for orchestrator v1.5: cross-execution handoff correlation ID
+    #[serde(default)]
+    pub handoff_id: Option<String>,
 }
 
 impl Run {
@@ -495,5 +519,11 @@ mod tests {
 
         assert_eq!(run.metadata.project_id, None);
         assert_eq!(run.metadata.workspace_id, None);
+        assert_eq!(run.metadata.trace_id, None);
+        assert_eq!(run.metadata.org_id, None);
+        assert_eq!(run.metadata.host_id, None);
+        assert_eq!(run.metadata.parent_execution_id, None);
+        assert_eq!(run.metadata.agent_role, None);
+        assert_eq!(run.metadata.handoff_id, None);
     }
 }

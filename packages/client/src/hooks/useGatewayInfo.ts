@@ -7,6 +7,11 @@ export interface GatewayInfo {
   dataDir?: string;
   workerUrl?: string;
   repoPath?: string;
+  featureFlags?: {
+    multiTenant: boolean;
+    orchestratorV1: boolean;
+    memoryEnhanced: boolean;
+  };
 }
 
 export const useGatewayInfo = () => {

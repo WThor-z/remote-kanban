@@ -7,5 +7,5 @@ mod commands;
 mod error;
 mod worktree;
 
-pub use error::{WorktreeError, Result};
+pub use error::{Result, WorktreeError};
 pub use worktree::{Worktree, WorktreeConfig, WorktreeManager, WorktreeStatus};

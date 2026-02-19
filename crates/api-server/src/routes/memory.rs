@@ -43,8 +43,16 @@ struct DeleteItemResponse {
     deleted: bool,
 }
 
-fn error_response(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<ErrorResponse>) {
-    (status, Json(ErrorResponse { error: message.into() }))
+fn error_response(
+    status: StatusCode,
+    message: impl Into<String>,
+) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        status,
+        Json(ErrorResponse {
+            error: message.into(),
+        }),
+    )
 }
 
 fn normalize_host_id(raw: Option<String>) -> Option<String> {
@@ -58,7 +66,9 @@ fn normalize_host_id(raw: Option<String>) -> Option<String> {
     })
 }
 
-fn ensure_any_store_enabled(settings: &MemorySettings) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+fn ensure_any_store_enabled(
+    settings: &MemorySettings,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
     if !settings.rust_store_enabled && !settings.gateway_store_enabled {
         return Err(error_response(
             StatusCode::CONFLICT,
@@ -91,9 +101,14 @@ async fn get_memory_settings(
         let host_id = normalize_host_id(host.host_id)
             .ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "hostId is required"))?;
         let payload = json!({ "hostId": host_id });
-        let data = proxy_memory(&state, &host_id, GatewayMemoryAction::SettingsGet, payload).await?;
-        let proxied: MemorySettings = serde_json::from_value(data)
-            .map_err(|err| error_response(StatusCode::BAD_GATEWAY, format!("Invalid gateway settings payload: {}", err)))?;
+        let data =
+            proxy_memory(&state, &host_id, GatewayMemoryAction::SettingsGet, payload).await?;
+        let proxied: MemorySettings = serde_json::from_value(data).map_err(|err| {
+            error_response(
+                StatusCode::BAD_GATEWAY,
+                format!("Invalid gateway settings payload: {}", err),
+            )
+        })?;
         return Ok(Json(proxied));
     }
 
@@ -125,7 +140,13 @@ async fn patch_memory_settings(
                 "hostId": host_id,
                 "patch": req.patch,
             });
-            let proxied = proxy_memory(&state, &host_id, GatewayMemoryAction::SettingsUpdate, payload).await;
+            let proxied = proxy_memory(
+                &state,
+                &host_id,
+                GatewayMemoryAction::SettingsUpdate,
+                payload,
+            )
+            .await;
             if !updated.rust_store_enabled {
                 let data = proxied?;
                 let settings: MemorySettings = serde_json::from_value(data).map_err(|err| {
@@ -137,7 +158,10 @@ async fn patch_memory_settings(
                 return Ok(Json(settings));
             }
             if let Err(err) = proxied {
-                warn!("Gateway settings mirror failed for host {}: {}", host_id, err.1.error);
+                warn!(
+                    "Gateway settings mirror failed for host {}: {}",
+                    host_id, err.1.error
+                );
             }
         }
     }
@@ -155,9 +179,14 @@ async fn list_memory_items(
     let host_id = normalize_host_id(query.host_id.clone());
 
     if !settings.rust_store_enabled && settings.gateway_store_enabled {
-        let host_id = host_id.ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "hostId is required"))?;
-        let payload = serde_json::to_value(&query)
-            .map_err(|err| error_response(StatusCode::BAD_REQUEST, format!("Invalid query payload: {}", err)))?;
+        let host_id =
+            host_id.ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "hostId is required"))?;
+        let payload = serde_json::to_value(&query).map_err(|err| {
+            error_response(
+                StatusCode::BAD_REQUEST,
+                format!("Invalid query payload: {}", err),
+            )
+        })?;
         let data = proxy_memory(&state, &host_id, GatewayMemoryAction::ItemsList, payload).await?;
         let items: Vec<MemoryItem> = serde_json::from_value(data).map_err(|err| {
             error_response(
@@ -180,9 +209,19 @@ async fn create_memory_item(
     ensure_any_store_enabled(&settings)?;
 
     if !settings.rust_store_enabled && settings.gateway_store_enabled {
-        let payload = serde_json::to_value(&req)
-            .map_err(|err| error_response(StatusCode::BAD_REQUEST, format!("Invalid request payload: {}", err)))?;
-        let data = proxy_memory(&state, &req.host_id, GatewayMemoryAction::ItemsCreate, payload).await?;
+        let payload = serde_json::to_value(&req).map_err(|err| {
+            error_response(
+                StatusCode::BAD_REQUEST,
+                format!("Invalid request payload: {}", err),
+            )
+        })?;
+        let data = proxy_memory(
+            &state,
+            &req.host_id,
+            GatewayMemoryAction::ItemsCreate,
+            payload,
+        )
+        .await?;
         let item: MemoryItem = serde_json::from_value(data).map_err(|err| {
             error_response(
                 StatusCode::BAD_GATEWAY,
@@ -199,9 +238,20 @@ async fn create_memory_item(
         .map_err(|err| error_response(StatusCode::BAD_REQUEST, err))?;
 
     if settings.gateway_store_enabled {
-        let payload = serde_json::to_value(&req)
-            .map_err(|err| error_response(StatusCode::BAD_REQUEST, format!("Invalid request payload: {}", err)))?;
-        if let Err(err) = proxy_memory(&state, &created.host_id, GatewayMemoryAction::ItemsCreate, payload).await {
+        let payload = serde_json::to_value(&req).map_err(|err| {
+            error_response(
+                StatusCode::BAD_REQUEST,
+                format!("Invalid request payload: {}", err),
+            )
+        })?;
+        if let Err(err) = proxy_memory(
+            &state,
+            &created.host_id,
+            GatewayMemoryAction::ItemsCreate,
+            payload,
+        )
+        .await
+        {
             warn!(
                 "Gateway create mirror failed for host {}: {}",
                 created.host_id, err.1.error
@@ -229,7 +279,8 @@ async fn update_memory_item(
         .or_else(|| local_existing.as_ref().map(|item| item.host_id.clone()));
 
     if !settings.rust_store_enabled && settings.gateway_store_enabled {
-        let host_id = host_id.ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "hostId is required"))?;
+        let host_id =
+            host_id.ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "hostId is required"))?;
         let payload = json!({
             "id": id,
             "hostId": host_id,
@@ -241,14 +292,16 @@ async fn update_memory_item(
             "pinned": req.pinned,
             "enabled": req.enabled,
         });
-        let data = proxy_memory(&state, &host_id, GatewayMemoryAction::ItemsUpdate, payload).await?;
+        let data =
+            proxy_memory(&state, &host_id, GatewayMemoryAction::ItemsUpdate, payload).await?;
         let item: Option<MemoryItem> = serde_json::from_value(data).map_err(|err| {
             error_response(
                 StatusCode::BAD_GATEWAY,
                 format!("Invalid gateway memory item payload: {}", err),
             )
         })?;
-        let item = item.ok_or_else(|| error_response(StatusCode::NOT_FOUND, "Memory item not found"))?;
+        let item =
+            item.ok_or_else(|| error_response(StatusCode::NOT_FOUND, "Memory item not found"))?;
         return Ok(Json(item));
     }
 
@@ -257,7 +310,8 @@ async fn update_memory_item(
         .update_item(&id, req.clone())
         .await
         .map_err(|err| error_response(StatusCode::BAD_REQUEST, err))?;
-    let updated = updated.ok_or_else(|| error_response(StatusCode::NOT_FOUND, "Memory item not found"))?;
+    let updated =
+        updated.ok_or_else(|| error_response(StatusCode::NOT_FOUND, "Memory item not found"))?;
 
     if settings.gateway_store_enabled {
         if let Some(host_id) = host_id {
@@ -272,11 +326,19 @@ async fn update_memory_item(
                 "pinned": req.pinned,
                 "enabled": req.enabled,
             });
-            if let Err(err) = proxy_memory(&state, &host_id, GatewayMemoryAction::ItemsUpdate, payload).await {
-                warn!("Gateway update mirror failed for host {}: {}", host_id, err.1.error);
+            if let Err(err) =
+                proxy_memory(&state, &host_id, GatewayMemoryAction::ItemsUpdate, payload).await
+            {
+                warn!(
+                    "Gateway update mirror failed for host {}: {}",
+                    host_id, err.1.error
+                );
             }
         } else {
-            warn!("Skip gateway memory mirror for item {} because hostId is unknown", id);
+            warn!(
+                "Skip gateway memory mirror for item {} because hostId is unknown",
+                id
+            );
         }
     }
 
@@ -296,16 +358,18 @@ async fn delete_memory_item(
     } else {
         None
     };
-    let host_id =
-        normalize_host_id(query.host_id).or_else(|| local_existing.as_ref().map(|item| item.host_id.clone()));
+    let host_id = normalize_host_id(query.host_id)
+        .or_else(|| local_existing.as_ref().map(|item| item.host_id.clone()));
 
     if !settings.rust_store_enabled && settings.gateway_store_enabled {
-        let host_id = host_id.ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "hostId is required"))?;
+        let host_id =
+            host_id.ok_or_else(|| error_response(StatusCode::BAD_REQUEST, "hostId is required"))?;
         let payload = json!({
             "id": id,
             "hostId": host_id,
         });
-        let data = proxy_memory(&state, &host_id, GatewayMemoryAction::ItemsDelete, payload).await?;
+        let data =
+            proxy_memory(&state, &host_id, GatewayMemoryAction::ItemsDelete, payload).await?;
         let result: DeleteItemResponse = serde_json::from_value(data).map_err(|err| {
             error_response(
                 StatusCode::BAD_GATEWAY,
@@ -313,7 +377,10 @@ async fn delete_memory_item(
             )
         })?;
         if !result.deleted {
-            return Err(error_response(StatusCode::NOT_FOUND, "Memory item not found"));
+            return Err(error_response(
+                StatusCode::NOT_FOUND,
+                "Memory item not found",
+            ));
         }
         return Ok(StatusCode::NO_CONTENT);
     }
@@ -324,7 +391,10 @@ async fn delete_memory_item(
         .await
         .map_err(|err| error_response(StatusCode::INTERNAL_SERVER_ERROR, err))?;
     if !deleted {
-        return Err(error_response(StatusCode::NOT_FOUND, "Memory item not found"));
+        return Err(error_response(
+            StatusCode::NOT_FOUND,
+            "Memory item not found",
+        ));
     }
 
     if settings.gateway_store_enabled {
@@ -333,11 +403,19 @@ async fn delete_memory_item(
                 "id": id,
                 "hostId": host_id,
             });
-            if let Err(err) = proxy_memory(&state, &host_id, GatewayMemoryAction::ItemsDelete, payload).await {
-                warn!("Gateway delete mirror failed for host {}: {}", host_id, err.1.error);
+            if let Err(err) =
+                proxy_memory(&state, &host_id, GatewayMemoryAction::ItemsDelete, payload).await
+            {
+                warn!(
+                    "Gateway delete mirror failed for host {}: {}",
+                    host_id, err.1.error
+                );
             }
         } else {
-            warn!("Skip gateway memory mirror for delete {} because hostId is unknown", id);
+            warn!(
+                "Skip gateway memory mirror for delete {} because hostId is unknown",
+                id
+            );
         }
     }
 
@@ -365,10 +443,7 @@ mod tests {
     use serde_json::{json, Value};
     use tempfile::TempDir;
     use tower::ServiceExt;
-    use vk_core::{
-        kanban::KanbanStore,
-        task::FileTaskStore,
-    };
+    use vk_core::{kanban::KanbanStore, task::FileTaskStore};
 
     use crate::{
         gateway::{
@@ -402,7 +477,9 @@ mod tests {
         )
         .await
         .unwrap();
-        gateway_manager.set_memory_store(state.memory_store_arc()).await;
+        gateway_manager
+            .set_memory_store(state.memory_store_arc())
+            .await;
 
         (state, gateway_manager, temp_dir)
     }
@@ -457,7 +534,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(created_resp.status(), StatusCode::OK);
-        let created_body = to_bytes(created_resp.into_body(), usize::MAX).await.unwrap();
+        let created_body = to_bytes(created_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let created: Value = serde_json::from_slice(&created_body).unwrap();
         let id = created["id"].as_str().unwrap().to_string();
 
@@ -571,7 +650,10 @@ mod tests {
         let manager_clone = Arc::clone(&manager);
         tokio::spawn(async move {
             while let Some(message) = rx.recv().await {
-                if let ServerToGatewayMessage::MemoryRequest { request_id, action, .. } = message {
+                if let ServerToGatewayMessage::MemoryRequest {
+                    request_id, action, ..
+                } = message
+                {
                     if action == crate::gateway::protocol::GatewayMemoryAction::ItemsList {
                         let payload = json!([{
                             "id": "m-1",

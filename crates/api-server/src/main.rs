@@ -3,6 +3,9 @@
 //! This is the main entry point for the Rust backend.
 //! It provides REST API on port 8081 and Socket.IO on port 8080.
 
+mod audit;
+mod auth;
+mod feature_flags;
 mod gateway;
 mod memory;
 mod routes;
@@ -17,7 +20,8 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::gateway::{GatewayManager, start_heartbeat_checker};
+use crate::feature_flags::feature_orchestrator_v1;
+use crate::gateway::{start_heartbeat_checker, GatewayManager};
 use crate::socket::{create_socket_layer, SocketState};
 use crate::state::AppState;
 use vk_core::kanban::KanbanStore;
@@ -43,13 +47,19 @@ async fn main() {
 
     // Create TaskStore first (needed by both GatewayManager, KanbanStore and AppState)
     let tasks_path = data_dir.join("tasks.json");
-    let task_store = Arc::new(FileTaskStore::new(tasks_path).await
-        .expect("Failed to initialize task store"));
+    let task_store = Arc::new(
+        FileTaskStore::new(tasks_path)
+            .await
+            .expect("Failed to initialize task store"),
+    );
 
     // Create KanbanStore synced with TaskStore
     let kanban_path = data_dir.join("kanban.json");
-    let kanban_store = Arc::new(KanbanStore::with_task_store(kanban_path, Arc::clone(&task_store)).await
-        .expect("Failed to initialize kanban store"));
+    let kanban_store = Arc::new(
+        KanbanStore::with_task_store(kanban_path, Arc::clone(&task_store))
+            .await
+            .expect("Failed to initialize kanban store"),
+    );
 
     // Create Gateway Manager with TaskStore and KanbanStore for Agent Gateway connections
     let gateway_manager = Arc::new(GatewayManager::with_stores(
@@ -66,8 +76,8 @@ async fn main() {
         Arc::clone(&kanban_store),
         Arc::clone(&gateway_manager),
     )
-        .await
-        .expect("Failed to initialize application state");
+    .await
+    .expect("Failed to initialize application state");
 
     // Create Socket.IO layer with the shared KanbanStore
     let socket_state = SocketState::new(
@@ -83,16 +93,29 @@ async fn main() {
         .set_memory_store(app_state.memory_store_arc())
         .await;
 
-// REST API server (port 8081)
-    let rest_app = Router::new()
+    // REST API server (port 8081)
+    let mut rest_app = Router::new()
         .merge(routes::health::router())
+        .merge(routes::auth::router())
         .merge(routes::task::router())
         .merge(routes::project::router())
         .merge(routes::workspace::router())
         .merge(routes::executor::router())
-        .merge(routes::memory::router())
+        .merge(routes::memory::router());
+
+    if feature_orchestrator_v1() {
+        rest_app = rest_app
+            .merge(routes::executions::router())
+            .merge(routes::ops::router());
+    } else {
+        tracing::info!(
+            "FEATURE_ORCHESTRATOR_V1 disabled: skipping /api/v1/executions and /api/v1/ops routes"
+        );
+    }
+
+    let rest_app = rest_app
+        .merge(routes::gateway::router())
         .with_state(app_state.clone())
-        .merge(routes::gateway::router(app_state.gateway_manager_arc()))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)

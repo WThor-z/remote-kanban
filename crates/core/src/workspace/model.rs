@@ -10,6 +10,8 @@ pub struct Workspace {
     pub id: Uuid,
     pub name: String,
     pub slug: String,
+    #[serde(default = "default_org_id")]
+    pub org_id: String,
     pub host_id: String,
     pub root_path: String,
     pub default_project_id: Option<Uuid>,
@@ -30,6 +32,7 @@ impl Workspace {
             id: Uuid::new_v4(),
             slug: slugify(&name),
             name,
+            org_id: default_org_id(),
             host_id: host_id.into(),
             root_path: root_path.into(),
             default_project_id: None,
@@ -42,6 +45,15 @@ impl Workspace {
     pub fn with_slug(mut self, slug: impl Into<String>) -> Self {
         self.slug = slug.into();
         self.updated_at = Utc::now();
+        self
+    }
+
+    pub fn with_org_id(mut self, org_id: impl Into<String>) -> Self {
+        let normalized = org_id.into().trim().to_string();
+        if !normalized.is_empty() {
+            self.org_id = normalized;
+            self.updated_at = Utc::now();
+        }
         self
     }
 
@@ -58,6 +70,8 @@ impl Workspace {
 pub struct CreateWorkspaceRequest {
     pub name: String,
     pub slug: Option<String>,
+    #[serde(default)]
+    pub org_id: Option<String>,
     pub host_id: String,
     pub root_path: String,
     pub default_project_id: Option<Uuid>,
@@ -69,6 +83,7 @@ pub struct WorkspaceSummary {
     pub id: Uuid,
     pub name: String,
     pub slug: String,
+    pub org_id: String,
     pub host_id: String,
     pub root_path: String,
     pub default_project_id: Option<Uuid>,
@@ -83,6 +98,7 @@ impl From<&Workspace> for WorkspaceSummary {
             id: workspace.id,
             name: workspace.name.clone(),
             slug: workspace.slug.clone(),
+            org_id: workspace.org_id.clone(),
             host_id: workspace.host_id.clone(),
             root_path: workspace.root_path.clone(),
             default_project_id: workspace.default_project_id,
@@ -113,6 +129,14 @@ fn slugify(input: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+fn default_org_id() -> String {
+    std::env::var("VK_DEFAULT_ORG_ID")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "default-org".to_string())
 }
 
 pub fn normalize_slug(input: &str) -> Option<String> {
@@ -148,6 +172,7 @@ mod tests {
 
         assert_eq!(workspace.name, "Platform");
         assert_eq!(workspace.slug, "platform");
+        assert_eq!(workspace.org_id, default_org_id());
         assert_eq!(workspace.host_id, "host-1");
         assert_eq!(workspace.root_path, "/repos/platform");
         assert!(workspace.default_project_id.is_none());
@@ -157,9 +182,11 @@ mod tests {
 
     #[test]
     fn test_workspace_with_slug_and_archive() {
-        let workspace =
-            Workspace::new("Platform", "host-1", "/repos/platform").with_slug("team-platform");
+        let workspace = Workspace::new("Platform", "host-1", "/repos/platform")
+            .with_slug("team-platform")
+            .with_org_id("org-test");
         assert_eq!(workspace.slug, "team-platform");
+        assert_eq!(workspace.org_id, "org-test");
 
         let archived = workspace.archive();
         assert!(archived.archived_at.is_some());
@@ -185,6 +212,7 @@ mod tests {
         let workspace = Workspace::new("Platform", "host-1", "/repos/platform");
         let value = serde_json::to_value(&workspace).unwrap();
 
+        assert_eq!(value["orgId"], json!(default_org_id()));
         assert_eq!(value["hostId"], json!("host-1"));
         assert_eq!(value["rootPath"], json!("/repos/platform"));
         assert!(value.get("root_path").is_none());
