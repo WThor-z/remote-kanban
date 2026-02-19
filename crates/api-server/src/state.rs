@@ -1,10 +1,10 @@
 //! Application state
 
+use socketioxide::SocketIo;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use socketioxide::SocketIo;
 
 use agent_runner::{ExecutorConfig, TaskExecutor};
 use git_worktree::WorktreeConfig;
@@ -13,6 +13,7 @@ use vk_core::project::ProjectStore;
 use vk_core::task::FileTaskStore;
 use vk_core::workspace::{CreateWorkspaceRequest, WorkspaceStore, WorkspaceSummary};
 
+use crate::auth::AuthStore;
 use crate::gateway::GatewayManager;
 use crate::memory::MemoryStore;
 
@@ -33,20 +34,25 @@ struct AppStateInner {
     pub socket_io: Arc<RwLock<Option<SocketIo>>>,
     pub gateway_manager: Arc<GatewayManager>,
     pub memory_store: Arc<MemoryStore>,
+    pub auth_store: Arc<AuthStore>,
 }
 
 impl AppState {
     /// Create a new AppState with the given data directory and gateway manager
     /// (creates its own TaskStore)
     #[allow(dead_code)]
-    pub async fn new(data_dir: PathBuf, gateway_manager: Arc<GatewayManager>) -> vk_core::Result<Self> {
+    pub async fn new(
+        data_dir: PathBuf,
+        gateway_manager: Arc<GatewayManager>,
+    ) -> vk_core::Result<Self> {
         let tasks_path = data_dir.join("tasks.json");
         let task_store = Arc::new(FileTaskStore::new(tasks_path).await?);
-        
+
         // Create kanban store
         let kanban_path = data_dir.join("kanban.json");
-        let kanban_store = Arc::new(KanbanStore::with_task_store(kanban_path, Arc::clone(&task_store)).await?);
-        
+        let kanban_store =
+            Arc::new(KanbanStore::with_task_store(kanban_path, Arc::clone(&task_store)).await?);
+
         Self::with_stores(data_dir, task_store, kanban_store, gateway_manager).await
     }
 
@@ -86,11 +92,12 @@ impl AppState {
 
         let project_path = data_dir.join("projects.json");
         let project_store = Arc::new(ProjectStore::new(project_path, default_workspace_id).await?);
-        let memory_store = Arc::new(
-            MemoryStore::new(data_dir.join("memory"))
-                .await
-                .map_err(|e| vk_core::Error::Storage(format!("Failed to initialize memory store: {}", e)))?,
-        );
+        let memory_store = Arc::new(MemoryStore::new(data_dir.join("memory")).await.map_err(
+            |e| vk_core::Error::Storage(format!("Failed to initialize memory store: {}", e)),
+        )?);
+        let auth_store = Arc::new(AuthStore::new(data_dir.join("auth")).await.map_err(|e| {
+            vk_core::Error::Storage(format!("Failed to initialize auth store: {}", e))
+        })?);
 
         // Create executor config
         let executor_config = ExecutorConfig {
@@ -120,6 +127,7 @@ impl AppState {
                 socket_io: Arc::new(RwLock::new(None)),
                 gateway_manager,
                 memory_store,
+                auth_store,
             }),
         })
     }
@@ -207,10 +215,17 @@ impl AppState {
     pub fn memory_store_arc(&self) -> Arc<MemoryStore> {
         Arc::clone(&self.inner.memory_store)
     }
+
+    pub fn auth_store(&self) -> &AuthStore {
+        &self.inner.auth_store
+    }
 }
 
 fn next_default_workspace_slug(workspaces: &[WorkspaceSummary]) -> String {
-    let existing: HashSet<&str> = workspaces.iter().map(|workspace| workspace.slug.as_str()).collect();
+    let existing: HashSet<&str> = workspaces
+        .iter()
+        .map(|workspace| workspace.slug.as_str())
+        .collect();
     if !existing.contains("default") {
         return "default".to_string();
     }
@@ -263,13 +278,13 @@ mod tests {
     use super::*;
 
     use tempfile::TempDir;
+    use uuid::Uuid;
     use vk_core::{
         kanban::KanbanStore,
         project::CreateProjectRequest,
         task::FileTaskStore,
         workspace::{CreateWorkspaceRequest, WorkspaceStore},
     };
-    use uuid::Uuid;
 
     #[tokio::test]
     async fn app_state_exposes_workspace_store() {
