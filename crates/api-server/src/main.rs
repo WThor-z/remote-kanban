@@ -3,6 +3,7 @@
 //! This is the main entry point for the Rust backend.
 //! It provides REST API on port 8081 and Socket.IO on port 8080.
 
+mod audit;
 mod gateway;
 mod memory;
 mod routes;
@@ -91,6 +92,7 @@ async fn main() {
         .merge(routes::workspace::router())
         .merge(routes::executor::router())
         .merge(routes::memory::router())
+        .merge(routes::ops::router())
         .with_state(app_state.clone())
         .merge(routes::gateway::router(app_state.gateway_manager_arc()))
         .layer(

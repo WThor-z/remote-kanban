@@ -16,6 +16,7 @@ use agent_runner::{AgentType, ChatMessage, MessageRole, Run, SessionState};
 use vk_core::kanban::KanbanTaskStatus;
 use vk_core::task::TaskRepository;
 
+use crate::audit::AuditEvent;
 use crate::gateway::protocol::GatewayTaskRequest;
 use crate::state::AppState;
 
@@ -263,6 +264,25 @@ async fn dispatch_to_gateway(
             } else {
                 tracing::info!("Created run {} for gateway task {}", run_id, task_id);
             }
+
+            record_audit_event(
+                state,
+                AuditEvent::new(
+                    "default",
+                    "api",
+                    "execution.created",
+                    Some(task_id),
+                    Some(run_id),
+                    Some(host_id.clone()),
+                    Some("accepted".to_string()),
+                    serde_json::json!({
+                        "source": "/api/tasks/{id}/execute",
+                        "agentType": agent_type,
+                        "baseBranch": base_branch,
+                    }),
+                ),
+            )
+            .await;
             
             // Set up event forwarding from Gateway to Socket.IO
             let state_clone = state.clone();
@@ -620,6 +640,23 @@ async fn stop_execution(
         )
     })?;
 
+    record_audit_event(
+        &state,
+        AuditEvent::new(
+            "default",
+            "api",
+            "execution.stop",
+            Some(task_id),
+            Some(session_id),
+            None,
+            Some("cancelled".to_string()),
+            serde_json::json!({
+                "source": "/api/tasks/{id}/stop",
+            }),
+        ),
+    )
+    .await;
+
     Ok(Json(ExecutionResponse {
         session_id,
         task_id,
@@ -670,6 +707,13 @@ async fn send_input(
     Path(task_id): Path<Uuid>,
     Json(req): Json<SendInputRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let execution_id = if let Some(session) = state.executor().get_session_by_task(task_id).await {
+        Some(session.read().await.id)
+    } else {
+        None
+    };
+    let input_length = req.content.len();
+
     state
         .executor()
         .send_input(task_id, req.content)
@@ -682,6 +726,24 @@ async fn send_input(
                 }),
             )
         })?;
+
+    record_audit_event(
+        &state,
+        AuditEvent::new(
+            "default",
+            "api",
+            "execution.input",
+            Some(task_id),
+            execution_id,
+            None,
+            Some("accepted".to_string()),
+            serde_json::json!({
+                "source": "/api/tasks/{id}/input",
+                "inputLength": input_length,
+            }),
+        ),
+    )
+    .await;
 
     Ok(StatusCode::OK)
 }
@@ -749,6 +811,12 @@ fn state_to_string(state: &SessionState) -> String {
         SessionState::Completed { exit_code, .. } => format!("completed({})", exit_code),
         SessionState::Failed { error, .. } => format!("failed: {}", error),
         SessionState::Cancelled { .. } => "cancelled".to_string(),
+    }
+}
+
+async fn record_audit_event(state: &AppState, event: AuditEvent) {
+    if let Err(err) = state.audit_store().append(event).await {
+        tracing::warn!("Failed to append audit event: {}", err);
     }
 }
 

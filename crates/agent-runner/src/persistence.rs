@@ -152,6 +152,117 @@ impl RunStore {
         Ok(runs)
     }
 
+    /// List runs globally across all tasks with pagination and optional filters.
+    pub fn list_runs_global_paginated(
+        &self,
+        offset: usize,
+        limit: usize,
+        status: Option<&str>,
+        task_id: Option<Uuid>,
+    ) -> Result<(Vec<Run>, bool)> {
+        if !self.base_dir.exists() {
+            return Ok((Vec::new(), false));
+        }
+
+        let mut runs: Vec<Run> = Vec::new();
+        let status = status
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty());
+
+        let task_entries = fs::read_dir(&self.base_dir).map_err(ExecutorError::from)?;
+        for task_entry in task_entries {
+            let task_entry = match task_entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    warn!("Failed to read task directory entry: {}", err);
+                    continue;
+                }
+            };
+            let task_path = task_entry.path();
+            if !task_path.is_dir() {
+                continue;
+            }
+
+            let Some(task_name) = task_path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let Ok(parsed_task_id) = Uuid::parse_str(task_name) else {
+                continue;
+            };
+            if task_id.is_some_and(|expected| expected != parsed_task_id) {
+                continue;
+            }
+
+            let run_entries = match fs::read_dir(&task_path) {
+                Ok(entries) => entries,
+                Err(err) => {
+                    warn!(
+                        "Failed to read run directory for task {}: {}",
+                        parsed_task_id, err
+                    );
+                    continue;
+                }
+            };
+
+            for run_entry in run_entries {
+                let run_entry = match run_entry {
+                    Ok(entry) => entry,
+                    Err(err) => {
+                        warn!("Failed to read run directory entry: {}", err);
+                        continue;
+                    }
+                };
+                let run_path = run_entry.path();
+                if !run_path.is_dir() {
+                    continue;
+                }
+
+                let Some(run_name) = run_path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                let Ok(run_id) = Uuid::parse_str(run_name) else {
+                    continue;
+                };
+
+                let run = match self.load_run(parsed_task_id, run_id) {
+                    Ok(run) => run,
+                    Err(err) => {
+                        warn!(
+                            "Failed to load run {} for task {}: {}",
+                            run_id, parsed_task_id, err
+                        );
+                        continue;
+                    }
+                };
+
+                if let Some(ref wanted_status) = status {
+                    let run_status = format!("{:?}", run.status).to_ascii_lowercase();
+                    if run_status != *wanted_status {
+                        continue;
+                    }
+                }
+
+                runs.push(run);
+            }
+        }
+
+        runs.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then(right.id.cmp(&left.id))
+        });
+
+        let total = runs.len();
+        let items = runs
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect::<Vec<_>>();
+        let has_more = total > offset + items.len();
+        Ok((items, has_more))
+    }
+
     /// Append an event to a run's event log
     pub fn append_event(&self, task_id: Uuid, run_id: Uuid, event: &ExecutionEvent) -> Result<()> {
         self.ensure_run_dir(task_id, run_id)?;
@@ -600,6 +711,44 @@ mod tests {
 
         let runs = store.list_runs(task_id).unwrap();
         assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn test_list_runs_global_paginated_supports_status_filter() {
+        let (store, _temp) = create_test_store();
+        let task_id = Uuid::new_v4();
+
+        let mut running = Run::new(
+            task_id,
+            AgentType::OpenCode,
+            "Running".to_string(),
+            "main".to_string(),
+        );
+        running.mark_started();
+        store.save_run(&running).unwrap();
+
+        let mut completed = Run::new(
+            task_id,
+            AgentType::OpenCode,
+            "Completed".to_string(),
+            "main".to_string(),
+        );
+        completed.mark_started();
+        completed.mark_completed(0, Some("ok".to_string()));
+        store.save_run(&completed).unwrap();
+
+        let (all, has_more) = store
+            .list_runs_global_paginated(0, 10, None, Some(task_id))
+            .unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(!has_more);
+
+        let (completed_only, has_more_completed) = store
+            .list_runs_global_paginated(0, 10, Some("completed"), Some(task_id))
+            .unwrap();
+        assert_eq!(completed_only.len(), 1);
+        assert_eq!(completed_only[0].id, completed.id);
+        assert!(!has_more_completed);
     }
 
     #[test]

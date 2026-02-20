@@ -17,10 +17,12 @@ import {
   ChevronDown,
   LayoutGrid,
   Database,
+  Activity,
 } from 'lucide-react';
 import { KanbanBoard } from './components/kanban/KanbanBoard';
 import { TaskDetailPanel, CreateTaskModal } from './components/task';
 import { MemoryPage } from './components/memory/MemoryPage';
+import { OpsConsolePage } from './components/ops/OpsConsolePage';
 import { WorkspaceEntryPage } from './components/workspace/WorkspaceEntryPage';
 import { WorkspaceProjectManagementPage } from './components/workspace/WorkspaceProjectManagementPage';
 import type { KanbanTask, AgentType } from '@opencode-vibe/protocol';
@@ -55,7 +57,7 @@ function App() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [skin, setSkin] = useState<'neural' | 'lab'>(readStoredSkin);
   const [language, setLanguage] = useState(readStoredConsoleLanguage);
-  const [view, setView] = useState<'board' | 'memory' | 'projects'>('board');
+  const [view, setView] = useState<'ops' | 'board' | 'memory' | 'projects'>('board');
   const [activeWorkspaceId, setActiveWorkspaceId] = useState('');
   const [workspaceEntrySelectionId, setWorkspaceEntrySelectionId] = useState(readStoredWorkspaceScope);
   const [hasStaleStoredWorkspace, setHasStaleStoredWorkspace] = useState(false);
@@ -197,7 +199,7 @@ function App() {
     [board, visibleTaskIds],
   );
 
-  // 获取正在执行的任务 ID 列表
+  // 获取正在执行的任�?ID 列表
   const executingTaskIds = Object.values(filteredBoard.tasks)
     .filter(task => task.status === 'doing')
     .map(task => task.id);
@@ -439,6 +441,17 @@ function App() {
             </div>
             <button
               type="button"
+              onClick={() => {
+                setView('ops');
+                setSelectedTask(null);
+                selectTask(null);
+              }}
+              className="tech-btn tech-btn-secondary"
+            >
+              <Activity size={14} /> Ops Console
+            </button>
+            <button
+              type="button"
               onClick={() => setView('board')}
               className="tech-btn tech-btn-secondary"
             >
@@ -534,7 +547,9 @@ function App() {
           {gatewayInfoError && <div className="gateway-error">{gatewayInfoError}</div>}
         </section>
 
-        {view === 'board' ? (
+        {view === 'ops' ? (
+          <OpsConsolePage workspaceId={activeWorkspaceId} language={language} />
+        ) : view === 'board' ? (
           <section className="tech-panel board-panel reveal reveal-2">
             <div className="section-bar">
                 <h2 className="section-title">{appCopy.sections.boardTitle}</h2>
@@ -598,3 +613,5 @@ function App() {
 }
 
 export default App
+
+

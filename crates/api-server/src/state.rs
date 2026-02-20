@@ -13,6 +13,7 @@ use vk_core::project::ProjectStore;
 use vk_core::task::FileTaskStore;
 use vk_core::workspace::{CreateWorkspaceRequest, WorkspaceStore, WorkspaceSummary};
 
+use crate::audit::AuditStore;
 use crate::gateway::GatewayManager;
 use crate::memory::MemoryStore;
 
@@ -33,6 +34,7 @@ struct AppStateInner {
     pub socket_io: Arc<RwLock<Option<SocketIo>>>,
     pub gateway_manager: Arc<GatewayManager>,
     pub memory_store: Arc<MemoryStore>,
+    pub audit_store: Arc<AuditStore>,
 }
 
 impl AppState {
@@ -91,6 +93,11 @@ impl AppState {
                 .await
                 .map_err(|e| vk_core::Error::Storage(format!("Failed to initialize memory store: {}", e)))?,
         );
+        let audit_store = Arc::new(
+            AuditStore::new(data_dir.join("audit"))
+                .await
+                .map_err(|e| vk_core::Error::Storage(format!("Failed to initialize audit store: {}", e)))?,
+        );
 
         // Create executor config
         let executor_config = ExecutorConfig {
@@ -120,6 +127,7 @@ impl AppState {
                 socket_io: Arc::new(RwLock::new(None)),
                 gateway_manager,
                 memory_store,
+                audit_store,
             }),
         })
     }
@@ -206,6 +214,14 @@ impl AppState {
 
     pub fn memory_store_arc(&self) -> Arc<MemoryStore> {
         Arc::clone(&self.inner.memory_store)
+    }
+
+    pub fn audit_store(&self) -> &AuditStore {
+        &self.inner.audit_store
+    }
+
+    pub fn audit_store_arc(&self) -> Arc<AuditStore> {
+        Arc::clone(&self.inner.audit_store)
     }
 }
 
